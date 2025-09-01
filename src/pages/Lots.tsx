@@ -1,536 +1,419 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+// src/pages/Lots.tsx
+import { useEffect, useMemo, useState, FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
-import {
-  COFFEE_COUNTRIES,
-  COFFEE_SPECIES,
-  LOT_STATUS,
-  MONTHS_KC,
-  MONTHS_RC,
-} from '@/constants/taxonomies'
-import { fetchEurPerKg, applyDifferential } from '@/lib/pricing'
+
+// ---- Types (lokal)
+type Species = 'arabica' | 'robusta' | 'other'
+type PriceScheme = 'fixed_eur' | 'fixed_usd' | 'differential'
+type LotStatus = 'contracted' | 'price_fixed' | 'at_port' | 'at_production_wh' | 'produced' | 'closed' | null
 
 type LotRow = {
   id: string
   short_desc: string | null
+  external_contract_no: string | null
+  dds_reference: string | null
   origin_country: string | null
   organic: boolean
-  species: 'arabica' | 'robusta' | 'other' | null
-  status: 'contracted' | 'price_fixed' | 'at_port' | 'at_production_wh' | 'produced' | 'closed' | null
-  price_scheme: 'fixed_eur' | 'fixed_usd' | 'differential'
-  price_fixed_eur_per_kg: number | null
-  price_fixed_usd_per_lb: number | null
-  diff_root: 'KC' | 'RM' | null
-  diff_month_code: string | null
-  diff_year: number | null
-  diff_value: number | null
+  species: Species
+  status: LotStatus
 }
 
-type Warehouse = { id: string; name: string; w_type: 'in_transit'|'port'|'production'|'finished'|'delivered' }
+type Warehouse = { id: string; name: string; w_type: string }
 
-type CalcState = {
-  symbol: string
-  unit: string        // 'USc/lb' oder 'USD/t'
-  baseEurKg: number   // Futures-Basis in EUR/kg (ohne Differential)
-  eurKgWithDiff: number // inkl. Differential
-} | null
+// ---- Formular-Shape + Defaults
+type LotForm = {
+  short_desc: string
+  external_contract_no: string
+  dds_reference: string
+  origin_country: string
+  organic: boolean
+  species: Species
+  status: LotStatus
+  price_scheme: PriceScheme
+  price_fixed_eur_per_kg: string
+  price_fixed_usd_per_lb: string
+  diff_root: string
+  diff_month_code: string
+  diff_year: string
+  diff_value: string
+  initial_quantity_kg: string
+  initial_warehouse_id: string
+}
+
+const FORM_DEFAULTS: LotForm = {
+  short_desc: '',
+  external_contract_no: '',
+  dds_reference: '',
+  origin_country: '',
+  organic: false,
+  species: 'arabica',
+  status: 'contracted',
+  price_scheme: 'fixed_eur',
+  price_fixed_eur_per_kg: '',
+  price_fixed_usd_per_lb: '',
+  diff_root: 'KC',          // ICE Arabica
+  diff_month_code: '',      // (H,K,N,U,Z) → Mär/Mai/Jul/Sep/Dez
+  diff_year: '',
+  diff_value: '',
+  initial_quantity_kg: '',
+  initial_warehouse_id: ''
+}
+
+// ---- Auswahllisten
+const COUNTRIES = [
+  'Brazil','Vietnam','Colombia','Indonesia','Ethiopia','Honduras','India','Uganda','Mexico','Guatemala',
+  'Peru','Nicaragua','Costa Rica','Kenya','Tanzania','Rwanda','Burundi','El Salvador','Panama','Ecuador',
+  'Papua New Guinea','DR Congo','Cameroon','Yemen','Bolivia','Dominican Republic','Laos','Thailand','China (Yunnan)'
+]
+
+const SPECIES_OPTIONS: { value: Species; label: string }[] = [
+  { value: 'arabica', label: 'Arabica' },
+  { value: 'robusta', label: 'Robusta' },
+  { value: 'other',   label: 'Andere' },
+]
+
+const STATUS_OPTIONS: { value: NonNullable<LotStatus>; label: string }[] = [
+  { value: 'contracted',       label: 'Kontrahiert' },
+  { value: 'price_fixed',      label: 'Preis fixiert' },
+  { value: 'at_port',          label: 'Im Hafen' },
+  { value: 'at_production_wh', label: 'Im Produktionslager' },
+  { value: 'produced',         label: 'Produziert' },
+  { value: 'closed',           label: 'Abgeschlossen' },
+]
+
+const PRICE_SCHEMES: { value: PriceScheme; label: string }[] = [
+  { value: 'fixed_eur', label: 'Fixiert in EUR/kg' },
+  { value: 'fixed_usd', label: 'Fixiert in USD/lb' },
+  { value: 'differential', label: 'Differential (KC/RC ± diff)' },
+]
+
+const DIFF_ROOTS = [
+  { value: 'KC', label: 'KC (Arabica ICE)' },
+  { value: 'RC', label: 'RC (Robusta ICE)' },
+]
+
+// Für KC sind üblich: H (Mär), K (Mai), N (Jul), U (Sep), Z (Dez)
+const FUT_MONTHS = [
+  { value: 'H', label: 'Mär (H)' },
+  { value: 'K', label: 'Mai (K)' },
+  { value: 'N', label: 'Jul (N)' },
+  { value: 'U', label: 'Sep (U)' },
+  { value: 'Z', label: 'Dez (Z)' },
+]
 
 export default function Lots() {
-  const [rows, setRows] = useState<LotRow[]>([])
+  const [rows, setRows]   = useState<LotRow[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [f, setF] = useState<LotForm>(FORM_DEFAULTS)
+  const [q, setQ] = useState('')
+  const [err, setErr] = useState<string|null>(null)
+  const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
 
-  // Formularstatus
-  const [formOpen, setFormOpen] = useState(false)
-  const [calc, setCalc] = useState<CalcState>(null)
-
-  const [f, setF] = useState({
-    short_desc: '',
-    external_contract_no: '',   // ⇐ NEU
-    origin_country: '',
-    organic: false,
-    species: 'arabica' as 'arabica'|'robusta'|'other',
-    status: 'contracted' as LotRow['status'],
-    price_scheme: 'fixed_eur' as LotRow['price_scheme'],
-    price_fixed_eur_per_kg: '',
-    price_fixed_usd_per_lb: '',
-    diff_root: 'KC' as 'KC'|'RM',
-    diff_month_code: '',
-    diff_year: new Date().getFullYear(),
-    diff_value: '',
-    // Anfangsbestand (optional)
-    initial_qty_kg: '',
-    initial_warehouse_id: '',
-  })
-
-  useEffect(() => {
-    let mounted = true
-    async function load() {
-      setLoading(true); setErr(null)
-      const [lRes, wRes] = await Promise.all([
-        supabase.from('green_lots').select(`
-          id, short_desc, origin_country, organic, species, status,
-          price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb,
-          diff_root, diff_month_code, diff_year, diff_value
-        `).order('created_at', { ascending: false }),
-        supabase.from('warehouses').select('id, name, w_type').order('name')
-      ])
-      if (!mounted) return
-      if (lRes.error) setErr(lRes.error.message)
-      if (wRes.error) setErr(wRes.error.message || null)
-      setRows((lRes.data ?? []) as LotRow[])
-      setWarehouses((wRes.data ?? []) as Warehouse[])
-      setLoading(false)
-    }
-    load()
-    return () => { mounted = false }
-  }, [])
-
-  const whOptions = useMemo(
-    () => warehouses.map(w => ({ value: w.id, label: `${w.name}` })),
-    [warehouses]
-  )
-
-  async function getMyOrgId(): Promise<string> {
-    const { data, error } = await supabase.from('profiles').select('org_id').maybeSingle()
-    if (error) throw error
-    if (!data?.org_id) throw new Error('Kein Profileintrag mit org_id gefunden – bitte Admin verknüpfen.')
-    return data.org_id
+  // Laden
+  async function load() {
+    setLoading(true); setErr(null)
+    const [lotsRes, whRes] = await Promise.all([
+      supabase.from('green_lots')
+        .select('id, short_desc, external_contract_no, dds_reference, origin_country, organic, species, status')
+        .order('created_at', { ascending: false }),
+      supabase.from('v_my_warehouses')
+        .select('id,name,w_type').order('name', { ascending: true })
+    ])
+    if (lotsRes.error) setErr(lotsRes.error.message)
+    if (whRes.error) setErr(whRes.error.message || null)
+    setRows((lotsRes.data ?? []) as LotRow[])
+    setWarehouses((whRes.data ?? []) as Warehouse[])
+    setLoading(false)
   }
+  useEffect(()=>{ load() }, [])
 
+  // Filtern
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return rows
+    return rows.filter(r => {
+      return (
+        (r.short_desc ?? '').toLowerCase().includes(term) ||
+        (r.origin_country ?? '').toLowerCase().includes(term) ||
+        (r.external_contract_no ?? '').toLowerCase().includes(term) ||
+        (r.dds_reference ?? '').toLowerCase().includes(term)
+      )
+    })
+  }, [rows, q])
+
+  // Insert
   async function onCreate(e: FormEvent) {
     e.preventDefault()
-    setErr(null); setCalc(null)
+    setErr(null); setBusy(true)
     try {
-      const orgId = await getMyOrgId()
+      // org_id für RLS
+      const prof = await supabase.from('profiles').select('org_id').maybeSingle()
+      if (prof.error) throw prof.error
+      const orgId = prof.data?.org_id
+      if (!orgId) throw new Error('Kein org_id im Profil gefunden.')
 
-      // Payload für green_lots
-      const payload: any = {
+      // Payload bauen
+      const price_fixed_eur_per_kg = f.price_scheme === 'fixed_eur' ? numOrNull(f.price_fixed_eur_per_kg) : null
+      const price_fixed_usd_per_lb = f.price_scheme === 'fixed_usd' ? numOrNull(f.price_fixed_usd_per_lb) : null
+      const diff_root       = f.price_scheme === 'differential' ? (f.diff_root || null) : null
+      const diff_month_code = f.price_scheme === 'differential' ? (f.diff_month_code || null) : null
+      const diff_year       = f.price_scheme === 'differential' ? intOrNull(f.diff_year) : null
+      const diff_value      = f.price_scheme === 'differential' ? numOrNull(f.diff_value) : null
+
+      const insertLot = {
         org_id: orgId,
-        external_contract_no: f.external_contract_no || null,
-        short_desc: f.short_desc || null,
-        origin_country: f.origin_country || null,
+        short_desc: emptyToNull(f.short_desc),
+        external_contract_no: emptyToNull(f.external_contract_no),
+        dds_reference: emptyToNull(f.dds_reference),
+        origin_country: emptyToNull(f.origin_country),
         organic: !!f.organic,
         species: f.species,
-        status: f.status ?? 'contracted',
+        status: f.status,
         price_scheme: f.price_scheme,
+        price_fixed_eur_per_kg,
+        price_fixed_usd_per_lb,
+        diff_root, diff_month_code, diff_year, diff_value
       }
 
-      if (f.price_scheme === 'fixed_eur') {
-        payload.price_fixed_eur_per_kg = f.price_fixed_eur_per_kg ? Number(f.price_fixed_eur_per_kg) : null
-        payload.price_fixed_usd_per_lb = null
-        payload.diff_root = null
-        payload.diff_month_code = null
-        payload.diff_year = null
-        payload.diff_value = null
-      } else if (f.price_scheme === 'fixed_usd') {
-        payload.price_fixed_usd_per_lb = f.price_fixed_usd_per_lb ? Number(f.price_fixed_usd_per_lb) : null
-        payload.price_fixed_eur_per_kg = null
-        payload.diff_root = null
-        payload.diff_month_code = null
-        payload.diff_year = null
-        payload.diff_value = null
-      } else {
-        // differential
-        if (!f.diff_month_code || !f.diff_year) {
-          throw new Error('Bitte Kontrakt-Monat und Jahr wählen.')
-        }
-        payload.price_fixed_eur_per_kg = null
-        payload.price_fixed_usd_per_lb = null
-        payload.diff_root = f.diff_root
-        payload.diff_month_code = f.diff_month_code
-        payload.diff_year = f.diff_year
-        payload.diff_value = f.diff_value ? Number(f.diff_value) : 0
-      }
+      const lotRes = await supabase.from('green_lots').insert([insertLot]).select('id').single()
+      if (lotRes.error) throw lotRes.error
+      const newLotId = lotRes.data!.id as string
 
-      const { data: lot, error: insErr } = await supabase
-        .from('green_lots')
-        .insert([payload])
-        .select('id')
-        .single()
-      if (insErr) throw insErr
-
-      // Anfangsbestand optional buchen
-      const qty = f.initial_qty_kg ? Number(f.initial_qty_kg) : 0
-      if (qty > 0 && f.initial_warehouse_id) {
-        const { error: mvErr } = await supabase.from('inventory_moves').insert([{
+      // optionaler Startbestand
+      const qty = numOrNull(f.initial_quantity_kg)
+      if (qty && f.initial_warehouse_id) {
+        const mv = await supabase.from('inventory_moves').insert([{
           org_id: orgId,
           item: 'green',
-          green_lot_id: lot!.id,
-          warehouse_id: f.initial_warehouse_id,
-          direction: 'in',
-          reason: 'purchase',
-          qty_kg: qty,
-          ref: 'initial'
+          green_lot_id: newLotId,
+          delta_kg: qty,
+          warehouse_id: f.initial_warehouse_id
         }])
-        if (mvErr) throw mvErr
+        if (mv.error) throw mv.error
       }
 
-      // neu laden + Formular zurücksetzen
-      const { data: newList } = await supabase.from('green_lots').select(`
-        id, short_desc, origin_country, organic, species, status,
-        price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb,
-        diff_root, diff_month_code, diff_year, diff_value
-      `).order('created_at', { ascending: false })
-      setRows((newList ?? []) as LotRow[])
-      setFormOpen(false)
-      setF({
-        short_desc: '',
-        origin_country: '',
-        organic: false,
-        species: 'arabica',
-        status: 'contracted',
-        price_scheme: 'fixed_eur',
-        price_fixed_eur_per_kg: '',
-        price_fixed_usd_per_lb: '',
-        diff_root: 'KC',
-        diff_month_code: '',
-        diff_year: new Date().getFullYear(),
-        diff_value: '',
-        initial_qty_kg: '',
-        initial_warehouse_id: ''
-      })
-    } catch (e:any) {
+      // Reset & Reload
+      setF(FORM_DEFAULTS)
+      await load()
+    } catch (e: any) {
       setErr(e.message ?? String(e))
+    } finally {
+      setBusy(false)
     }
   }
-
-  // UI Helpers
-  const monthOptions = f.diff_root === 'RM' ? MONTHS_RC : MONTHS_KC
-
-  if (loading) return <div>Lade Lots…</div>
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-medium">Rohkaffee‑Lots</h2>
-        <button
-          className="rounded bg-slate-800 text-white px-3 py-1.5 text-sm"
-          onClick={() => setFormOpen(v => !v)}
-        >
-          {formOpen ? 'Abbrechen' : 'Neues Lot'}
-        </button>
+      <h2 className="text-lg font-semibold">Rohkaffee‑Lots</h2>
+
+      {/* Suche */}
+      <div className="flex items-center justify-between gap-3">
+        <input
+          className="border rounded px-3 py-2 w-full max-w-md text-sm"
+          placeholder="Suchen (Beschreibung, Herkunft, Kontraktnr., DDS‑Ref)…"
+          value={q} onChange={e=>setQ(e.target.value)}
+        />
+        <div className="text-sm text-slate-500">{filtered.length} von {rows.length}</div>
       </div>
 
-      {formOpen && (
-        <form onSubmit={onCreate} className="border rounded p-4 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-sm">
-              Kurzbeschreibung
-              <input
-                className="border rounded px-3 py-2 w-full"
-                placeholder="z. B. Peru coop xyz, 84+"
-                value={f.short_desc}
-                onChange={e => setF({ ...f, short_desc: e.target.value })}
-              />
-            </label>
+      {/* Tabelle */}
+      <div className="border rounded overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="text-left p-2">Lot</th>
+              <th className="text-left p-2">Herkunft</th>
+              <th className="text-left p-2">Bio</th>
+              <th className="text-left p-2">Sorte</th>
+              <th className="text-left p-2">Status</th>
+              <th className="text-left p-2">DDS‑Ref</th>
+              <th className="text-left p-2">Kontraktnr.</th>
+              <th className="text-left p-2">Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(r => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">{r.short_desc ?? r.id}</td>
+                <td className="p-2">{r.origin_country ?? '—'}</td>
+                <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
+                <td className="p-2">{labelSpecies(r.species)}</td>
+                <td className="p-2">{labelStatus(r.status)}</td>
+                <td className="p-2">{r.dds_reference ?? '—'}</td>
+                <td className="p-2">{r.external_contract_no ?? '—'}</td>
+                <td className="p-2">
+                  <Link to={`/lots/${r.id}`} className="text-sky-700 underline">Details</Link>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td className="p-2" colSpan={8}>Keine Lots gefunden.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
-            <label className="text-sm">
-              Kontraktnummer Importeur/Händler
-              <input
-                className="border rounded px-3 py-2 w-full"
-                placeholder="frei"
-                value={f.external_contract_no}
-                onChange={e => setF({ ...f, external_contract_no: e.target.value })}
-              />
-            </label>
+      {/* Neues Lot */}
+      <form onSubmit={onCreate} className="border rounded p-4 space-y-4">
+        <h3 className="font-medium">Neues Lot anlegen</h3>
 
-            <label className="text-sm">
-              Herkunftsland
-              <input
-                list="coffee-countries"
-                className="border rounded px-3 py-2 w-full"
-                placeholder="Land auswählen oder tippen"
-                value={f.origin_country}
-                onChange={e => setF({ ...f, origin_country: e.target.value })}
-              />
-              <datalist id="coffee-countries">
-                {COFFEE_COUNTRIES.map(c => <option key={c} value={c} />)}
-              </datalist>
-            </label>
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <label className="col-span-2">Kurzbeschreibung
+            <input className="border rounded px-3 py-2 w-full"
+                   value={f.short_desc}
+                   onChange={e=>setF(prev=>({...prev, short_desc:e.target.value}))}/>
+          </label>
+          <label>Herkunftsland
+            <select className="border rounded px-3 py-2 w-full"
+                    value={f.origin_country}
+                    onChange={e=>setF(prev=>({...prev, origin_country:e.target.value}))}>
+              <option value="">— wählen —</option>
+              {COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
 
-            <label className="text-sm flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={f.organic}
-                onChange={e => setF({ ...f, organic: e.target.checked })}
-              />
-              Bio
-            </label>
+          <label>Kontraktnummer Importeur/Händler
+            <input className="border rounded px-3 py-2 w-full"
+                   value={f.external_contract_no}
+                   onChange={e=>setF(prev=>({...prev, external_contract_no:e.target.value}))}/>
+          </label>
+          <label>DDS‑Referenz
+            <input className="border rounded px-3 py-2 w-full"
+                   value={f.dds_reference}
+                   onChange={e=>setF(prev=>({...prev, dds_reference:e.target.value}))}/>
+          </label>
 
-            <label className="text-sm">
-              Sorte
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={f.species}
-                onChange={e => setF({ ...f, species: e.target.value as any })}
-              >
-                {COFFEE_SPECIES.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={f.organic}
+                   onChange={e=>setF(prev=>({...prev, organic:e.target.checked}))}/>
+            Bio
+          </label>
+
+          <label>Sorte
+            <select className="border rounded px-3 py-2 w-full"
+                    value={f.species}
+                    onChange={e=>setF(prev=>({...prev, species:e.target.value as Species}))}>
+              {SPECIES_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </label>
+
+          <label>Status
+            <select className="border rounded px-3 py-2 w-full"
+                    value={f.status ?? 'contracted'}
+                    onChange={e=>setF(prev=>({...prev, status: e.target.value as LotStatus}))}>
+              {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </label>
+        </div>
+
+        {/* Preis */}
+        <div className="border rounded p-3">
+          <div className="font-medium mb-2 text-sm">Preis</div>
+          <div className="grid grid-cols-4 gap-3 text-sm">
+            <label>Schema
+              <select className="border rounded px-3 py-2 w-full"
+                      value={f.price_scheme}
+                      onChange={e=>setF(prev=>({...prev, price_scheme: e.target.value as PriceScheme}))}>
+                {PRICE_SCHEMES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
             </label>
 
-            <label className="text-sm">
-              Status
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={f.status ?? 'contracted'}
-                onChange={e => setF({ ...f, status: e.target.value as any })}
-              >
-                {LOT_STATUS.map(s => (
-                  <option key={s.value} value={s.value}>{s.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="text-sm">
-              Preis‑Schema
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={f.price_scheme}
-                onChange={e => {
-                  const ps = e.target.value as LotRow['price_scheme']
-                  setF({
-                    ...f,
-                    price_scheme: ps,
-                    // Felder bei Schemawechsel aufräumen
-                    price_fixed_eur_per_kg: ps === 'fixed_eur' ? f.price_fixed_eur_per_kg : '',
-                    price_fixed_usd_per_lb: ps === 'fixed_usd' ? f.price_fixed_usd_per_lb : '',
-                    diff_root: ps === 'differential' ? f.diff_root : 'KC',
-                    diff_month_code: ps === 'differential' ? f.diff_month_code : '',
-                    diff_year: ps === 'differential' ? f.diff_year : new Date().getFullYear(),
-                    diff_value: ps === 'differential' ? f.diff_value : '',
-                  })
-                  setCalc(null)
-                }}
-              >
-                <option value="fixed_eur">Fixiert in EUR/kg</option>
-                <option value="fixed_usd">Fixiert in USD/lb</option>
-                <option value="differential">Differential</option>
-              </select>
-            </label>
-
-            {/* Preisfelder je Schema */}
             {f.price_scheme === 'fixed_eur' && (
-              <label className="text-sm">
-                Fixpreis (EUR/kg)
-                <input
-                  type="number" step="0.0001"
-                  className="border rounded px-3 py-2 w-full"
-                  value={f.price_fixed_eur_per_kg}
-                  onChange={e => setF({ ...f, price_fixed_eur_per_kg: e.target.value })}
-                />
+              <label className="col-span-3">Fixpreis EUR/kg
+                <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
+                       value={f.price_fixed_eur_per_kg}
+                       onChange={e=>setF(prev=>({...prev, price_fixed_eur_per_kg: e.target.value}))}/>
               </label>
             )}
 
             {f.price_scheme === 'fixed_usd' && (
-              <>
-                <label className="text-sm">
-                  Fixpreis (USD/lb)
-                  <input
-                    type="number" step="0.0001"
-                    className="border rounded px-3 py-2 w-full"
-                    value={f.price_fixed_usd_per_lb}
-                    onChange={e => setF({ ...f, price_fixed_usd_per_lb: e.target.value })}
-                  />
-                </label>
-                <div className="text-sm flex items-end gap-2">
-                  <button
-                    type="button"
-                    className="rounded bg-slate-200 px-3 py-2"
-                    onClick={async () => {
-                      // USD/lb -> EUR/kg:  usd_per_lb * 2.2046226218 * (USD->EUR)
-                      const { eur_per_kg, unit, symbol, fx } = await fetchEurPerKg({ root: 'KC' }) // FX holen
-                      const usdPerLb = f.price_fixed_usd_per_lb ? Number(f.price_fixed_usd_per_lb) : 0
-                      const eurKg = usdPerLb * 2.2046226218 * fx.usd_to_eur
-                      setCalc({
-                        symbol, unit,
-                        baseEurKg: eurKg, eurKgWithDiff: eurKg
-                      })
-                    }}
-                  >
-                    In EUR/kg umrechnen
-                  </button>
-                </div>
-              </>
+              <label className="col-span-3">Fixpreis USD/lb
+                <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
+                       value={f.price_fixed_usd_per_lb}
+                       onChange={e=>setF(prev=>({...prev, price_fixed_usd_per_lb: e.target.value}))}/>
+              </label>
             )}
 
             {f.price_scheme === 'differential' && (
-              <div className="col-span-2 grid grid-cols-4 gap-3 text-sm">
-                <label>
-                  Kontrakt
-                  <select
-                    className="border rounded px-3 py-2 w-full"
-                    value={f.diff_root}
-                    onChange={e => { setF({ ...f, diff_root: e.target.value as any, diff_month_code: '' }); setCalc(null) }}
-                  >
-                    <option value="KC">KC (Arabica)</option>
-                    <option value="RM">RM (Robusta)</option>
+              <>
+                <label>Kontrakt
+                  <select className="border rounded px-3 py-2 w-full"
+                          value={f.diff_root}
+                          onChange={e=>setF(prev=>({...prev, diff_root: e.target.value}))}>
+                    {DIFF_ROOTS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
                 </label>
-                <label>
-                  Monat
-                  <select
-                    className="border rounded px-3 py-2 w-full"
-                    value={f.diff_month_code}
-                    onChange={e => setF({ ...f, diff_month_code: e.target.value })}
-                  >
+                <label>Monat
+                  <select className="border rounded px-3 py-2 w-full"
+                          value={f.diff_month_code}
+                          onChange={e=>setF(prev=>({...prev, diff_month_code: e.target.value}))}>
                     <option value="">—</option>
-                    {monthOptions.map(m => <option key={m.code} value={m.code}>{m.label}</option>)}
+                    {FUT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </select>
                 </label>
-                <label>
-                  Jahr
-                  <input
-                    type="number" min={new Date().getFullYear()-1} max={2035}
-                    className="border rounded px-3 py-2 w-full"
-                    value={f.diff_year}
-                    onChange={e => setF({ ...f, diff_year: Number(e.target.value) })}
-                  />
+                <label>Jahr (YYYY)
+                  <input className="border rounded px-3 py-2 w-full"
+                         placeholder="2026"
+                         value={f.diff_year}
+                         onChange={e=>setF(prev=>({...prev, diff_year: e.target.value}))}/>
                 </label>
-                <label>
-                  Differential
-                  <div className="flex">
-                    <span className="inline-flex items-center px-2 border border-r-0 rounded-l bg-slate-50 text-sm">
-                      {f.diff_root === 'RM' ? 'USD/t' : 'c/lb'}
-                    </span>
-                    <input
-                      type="number" step="0.01"
-                      className="border rounded-r px-3 py-2 w-full"
-                      value={f.diff_value}
-                      onChange={e => setF({ ...f, diff_value: e.target.value })}
-                    />
-                  </div>
+                <label>Diff (±)
+                  <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
+                         placeholder="+0.20"
+                         value={f.diff_value}
+                         onChange={e=>setF(prev=>({...prev, diff_value: e.target.value}))}/>
                 </label>
-
-                <div className="col-span-4">
-                  <button
-                    type="button"
-                    className="rounded bg-slate-200 px-3 py-2"
-                    onClick={async () => {
-                      if (!f.diff_month_code || !f.diff_year) return
-                      const root = f.diff_root
-                      const q = await fetchEurPerKg({ root, month: f.diff_month_code, year: f.diff_year })
-                      const eurkg = applyDifferential({
-                        root,
-                        futures_close: q.close, // KC: c/lb ; RM: USD/t
-                        usd_to_eur: q.fx.usd_to_eur,
-                        diff_native: f.diff_value ? Number(f.diff_value) : 0
-                      })
-                      setCalc({
-                        symbol: q.symbol, unit: q.unit,
-                        baseEurKg: q.eur_per_kg,
-                        eurKgWithDiff: eurkg
-                      })
-                    }}
-                  >
-                    Preis berechnen
-                  </button>
-                  {calc && (
-                    <div className="mt-2 text-sm">
-                      <div>Futures: <b>{calc.symbol}</b> ({calc.unit}) → Basis ≈ <b>{calc.baseEurKg.toFixed(3)} EUR/kg</b></div>
-                      <div>Mit Differential: <b className="text-green-700">{calc.eurKgWithDiff.toFixed(3)} EUR/kg</b></div>
-                    </div>
-                  )}
-                </div>
-              </div>
+              </>
             )}
+          </div>
+        </div>
 
-            {/* Anfangsbestand (optional) */}
-            <label className="text-sm">
-              Anfangsbestand (kg, optional)
-              <input
-                className="border rounded px-3 py-2 w-full"
-                placeholder="z. B. 360.0"
-                value={f.initial_qty_kg}
-                onChange={e => setF({ ...f, initial_qty_kg: e.target.value })}
-              />
+        {/* Startbestand */}
+        <div className="border rounded p-3">
+          <div className="font-medium mb-2 text-sm">Startbestand (optional)</div>
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <label>Menge (kg)
+              <input type="number" step="0.01"
+                     className="border rounded px-3 py-2 w-full"
+                     value={f.initial_quantity_kg}
+                     onChange={e=>setF(prev=>({...prev, initial_quantity_kg: e.target.value}))}/>
             </label>
-            <label className="text-sm">
-              Lager (für Anfangsbestand)
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={f.initial_warehouse_id}
-                onChange={e => setF({ ...f, initial_warehouse_id: e.target.value })}
-              >
-                <option value="">— Lager wählen —</option>
-                {whOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            <label>in Lager
+              <select className="border rounded px-3 py-2 w-full"
+                      value={f.initial_warehouse_id}
+                      onChange={e=>setF(prev=>({...prev, initial_warehouse_id: e.target.value}))}>
+                <option value="">— wählen —</option>
+                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </label>
+            <div className="self-center text-xs text-slate-500">
+              Wenn beides gesetzt ist, wird ein Bestandseintrag erstellt.
+            </div>
           </div>
+        </div>
 
-          <div className="text-right">
-            <button className="rounded bg-green-700 text-white px-3 py-1.5 text-sm">
-              Speichern
-            </button>
-          </div>
-
+        <div className="flex items-center justify-between">
           {err && <div className="text-red-600 text-sm">{err}</div>}
-        </form>
-      )}
-
-      <table className="w-full border border-slate-200 text-sm">
-        <thead className="bg-slate-50">
-          <tr>
-            <th className="text-left p-2">Details</th>
-            <th className="text-left p-2">Kurzbeschreibung</th>
-            <th className="text-left p-2">Herkunft</th>
-            <th className="text-left p-2">Sorte</th>
-            <th className="text-left p-2">Bio</th>
-            <th className="text-left p-2">Status</th>
-            <th className="text-left p-2">Preis‑Schema</th>
-            <th className="text-left p-2">Preis‑Felder</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id} className="border-t">
-              <td className="p-2">
-                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
-              </td>
-              <td className="p-2">{r.short_desc ?? '–'}</td>
-              <td className="p-2">{r.origin_country ?? '–'}</td>
-              <td className="p-2">{labelSpecies(r.species)}</td>
-              <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
-              <td className="p-2">{labelStatus(r.status)}</td>
-              <td className="p-2">{labelScheme(r.price_scheme)}</td>
-              <td className="p-2">
-                {r.price_scheme === 'fixed_eur' && (r.price_fixed_eur_per_kg != null
-                  ? `${r.price_fixed_eur_per_kg.toLocaleString('de-DE', { maximumFractionDigits: 3 })} EUR/kg`
-                  : '—')}
-                {r.price_scheme === 'fixed_usd' && (r.price_fixed_usd_per_lb != null
-                  ? `${r.price_fixed_usd_per_lb.toLocaleString('de-DE', { maximumFractionDigits: 4 })} USD/lb`
-                  : '—')}
-                {r.price_scheme === 'differential' && (
-                  <>
-                    <span>{r.diff_root ?? '—'} {r.diff_month_code ?? '–'} {r.diff_year ?? '–'}</span>
-                    {' · '}
-                    <span>{r.diff_value != null ? (r.diff_root === 'RM'
-                      ? `${r.diff_value} USD/t`
-                      : `${r.diff_value} c/lb`) : '—'}</span>
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" disabled={busy}>
+            {busy ? 'Speichere…' : 'Lot anlegen'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
 
-// --- Label-Helper unten, damit das JSX schlank bleibt
-function labelScheme(s: LotRow['price_scheme']) {
+// ---- Helpers
+function labelSpecies(s: Species) {
   switch (s) {
-    case 'fixed_eur': return 'Fixiert in EUR/kg'
-    case 'fixed_usd': return 'Fixiert in USD/lb'
-    case 'differential': return 'Differential'
-    default: return String(s)
+    case 'arabica': return 'Arabica'
+    case 'robusta': return 'Robusta'
+    default: return 'Andere'
   }
 }
-function labelStatus(s: LotRow['status']) {
+function labelStatus(s: LotStatus) {
   switch (s) {
     case 'contracted': return 'Kontrahiert'
     case 'price_fixed': return 'Preis fixiert'
@@ -538,14 +421,9 @@ function labelStatus(s: LotRow['status']) {
     case 'at_production_wh': return 'Im Produktionslager'
     case 'produced': return 'Produziert'
     case 'closed': return 'Abgeschlossen'
-    default: return s ?? '–'
+    default: return '—'
   }
 }
-function labelSpecies(sp: LotRow['species']) {
-  switch (sp) {
-    case 'arabica': return 'Arabica'
-    case 'robusta': return 'Robusta'
-    case 'other': return 'Andere'
-    default: return sp ?? '–'
-  }
-}
+function emptyToNull(s: string) { return s.trim() === '' ? null : s }
+function numOrNull(s: string) { const n = parseFloat(s); return isFinite(n) ? n : null }
+function intOrNull(s: string) { const n = parseInt(s, 10); return Number.isInteger(n) ? n : null }
