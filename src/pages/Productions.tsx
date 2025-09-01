@@ -45,7 +45,7 @@ export default function Productions() {
       const [pRes, vRes, wRes, lRes] = await Promise.all([
         supabase.from('products').select('id, name').order('name'),
         supabase.from('product_variants').select('id, product_id, packaging_type, pack_size_g, capsules_per_pack, grams_per_capsule').eq('active', true),
-        supabase.from('warehouses').select('id, name, w_type').order('name'),
+        supabase.from('v_my_warehouses').select('id, name, w_type').order('name'),
         supabase.from('green_lots').select('id, short_desc').order('created_at', { ascending: false })
       ])
       if (!mounted) return
