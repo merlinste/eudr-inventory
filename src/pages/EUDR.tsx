@@ -1,169 +1,143 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
-type EudrLot = {
-  id: string
-  short_desc: string | null
+type LotRow = {
+  green_lot_id: string
+  lot_label: string
   origin_country: string | null
   dds_reference: string | null
   production_start: string | null
   production_end: string | null
 }
-
-type EudrBatch = {
-  id: string
+type BatchRow = {
+  finished_batch_id: string
   product_name: string
   batch_code: string | null
   mhd_text: string | null
-  eudr_refs: string[] | null
+  dds_refs: string | null
 }
 
-export default function EUDR() {
-  const [lots, setLots] = useState<EudrLot[]>([])
-  const [batches, setBatches] = useState<EudrBatch[]>([])
+export default function Eudr() {
+  const [lots, setLots] = useState<LotRow[]>([])
+  const [batches, setBatches] = useState<BatchRow[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    let mounted = true
+    let alive = true
     async function load() {
       setLoading(true); setErr(null)
-
-      const lotsSql = supabase
-        .from('eudr_packages')
-        .select(`
-          id:green_lot_id,
-          dds_reference,
-          production_start,
-          production_end,
-          green_lots!inner(short_desc, origin_country)
-        `)
-
-      const batchSql = supabase
-        .from('finished_batches')
-        .select(`
-          id,
-          batch_code,
-          mhd_text,
-          eudr_refs,
-          products!inner(name)
-        `)
-        .order('created_at', { ascending: false })
-        .limit(200)
-
-      const [lRes, bRes] = await Promise.all([lotsSql, batchSql])
-
-      if (!mounted) return
-      if (lRes.error) setErr(lRes.error.message)
-      if (bRes.error) setErr(bRes.error.message || null)
-
-      const lotRows: EudrLot[] = (lRes.data ?? []).map((r: any) => ({
-        id: r.id,
-        dds_reference: r.dds_reference,
-        production_start: r.production_start,
-        production_end: r.production_end,
-        short_desc: r.green_lots?.short_desc ?? null,
-        origin_country: r.green_lots?.origin_country ?? null
-      }))
-      const batchRows: EudrBatch[] = (bRes.data ?? []).map((r: any) => ({
-        id: r.id,
-        product_name: r.products?.name ?? '',
-        batch_code: r.batch_code,
-        mhd_text: r.mhd_text,
-        eudr_refs: r.eudr_refs
-      }))
-      setLots(lotRows)
-      setBatches(batchRows)
+      const [l, b] = await Promise.all([
+        supabase.from('v_dds_refs_by_green_lot').select('*').order('lot_label'),
+        supabase.from('v_dds_refs_by_finished_batch').select('*').order('product_name')
+      ])
+      if (!alive) return
+      if (l.error) setErr(l.error.message)
+      if (b.error) setErr(b.error.message || null)
+      setLots((l.data ?? []) as LotRow[])
+      setBatches((b.data ?? []) as BatchRow[])
       setLoading(false)
     }
     load()
-    return () => { mounted = false }
+    return () => { alive = false }
   }, [])
 
-  function exportLotsCsv() {
-    const header = ['lot_id','short_desc','origin_country','dds_reference','production_start','production_end']
-    const rows = lots.map(l => [
-      l.id, wrap(l.short_desc), wrap(l.origin_country), wrap(l.dds_reference), l.production_start ?? '', l.production_end ?? ''
-    ])
-    downloadCsv('eudr_lots.csv', [header, ...rows])
-  }
-
-  function exportBatchesCsv() {
-    const header = ['batch_id','product','batch_code','mhd','eudr_refs']
-    const rows = batches.map(b => [
-      b.id, wrap(b.product_name), wrap(b.batch_code), wrap(b.mhd_text),
-      wrap((b.eudr_refs ?? []).join('|'))
-    ])
-    downloadCsv('eudr_batches.csv', [header, ...rows])
-  }
-
-  function wrap(v: string | null | undefined) { return v == null ? '' : `"${String(v).replace(/"/g,'""')}"` }
-  function downloadCsv(filename: string, data: (string|number)[][]) {
-    const csv = data.map(r => r.join(',')).join('\n')
+  function exportCsv(name: string, rows: (string | number)[][]) {
+    const csv = rows.map(r => r.map(v => {
+      const s = v == null ? '' : String(v)
+      return `"${s.replace(/"/g,'""')}"`
+    }).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
-    URL.revokeObjectURL(url)
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
   }
 
-  if (loading) return <div>Lade EUDR…</div>
-  if (err) return <div className="text-red-600">Fehler: {err}</div>
+  if (loading) return <div>Lade…</div>
 
   return (
-    <div className="space-y-8">
-      <section>
+    <div className="space-y-6">
+      <h2 className="text-lg font-semibold">EUDR</h2>
+
+      <section className="border rounded p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">DDS‑Referenzen je Rohkaffee‑Lot</h2>
-          <button onClick={exportLotsCsv} className="rounded bg-slate-800 text-white px-3 py-1.5 text-sm">CSV exportieren</button>
+          <h3 className="font-medium">DDS‑Referenzen je Rohkaffee‑Lot</h3>
+          <button
+            className="rounded bg-slate-800 text-white px-3 py-1.5 text-sm"
+            onClick={()=>{
+              exportCsv('dds_refs_by_green_lot.csv', [
+                ['Lot','Herkunft','DDS‑Ref','Produktion Start','Produktion Ende'],
+                ...lots.map(l => [l.lot_label, l.origin_country ?? '', l.dds_reference ?? '', l.production_start ?? '', l.production_end ?? ''])
+              ])
+            }}
+          >
+            CSV exportieren
+          </button>
         </div>
-        <table className="w-full border mt-3 text-sm">
+        <table className="w-full text-sm mt-3">
           <thead className="bg-slate-50">
             <tr>
-              <th className="p-2 text-left">Lot</th>
-              <th className="p-2 text-left">Herkunft</th>
-              <th className="p-2 text-left">DDS‑Ref</th>
-              <th className="p-2 text-left">Produktion</th>
+              <th className="text-left p-2">Lot</th>
+              <th className="text-left p-2">Herkunft</th>
+              <th className="text-left p-2">DDS‑Ref</th>
+              <th className="text-left p-2">Produktion</th>
             </tr>
           </thead>
           <tbody>
             {lots.map(l => (
-              <tr key={l.id} className="border-t">
-                <td className="p-2">{l.short_desc ?? '–'}</td>
+              <tr key={l.green_lot_id} className="border-t">
+                <td className="p-2">{l.lot_label}</td>
                 <td className="p-2">{l.origin_country ?? '–'}</td>
                 <td className="p-2">{l.dds_reference ?? '–'}</td>
-                <td className="p-2">{[l.production_start,l.production_end].filter(Boolean).join(' → ') || '–'}</td>
+                <td className="p-2">
+                  {(l.production_start || l.production_end)
+                    ? `${l.production_start ?? '…'} – ${l.production_end ?? '…'}`
+                    : '–'}
+                </td>
               </tr>
             ))}
+            {lots.length === 0 && <tr><td className="p-2" colSpan={4}>Keine Daten.</td></tr>}
           </tbody>
         </table>
       </section>
 
-      <section>
+      <section className="border rounded p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">Aggregierte Referenzen je Fertig‑Charge</h2>
-          <button onClick={exportBatchesCsv} className="rounded bg-slate-800 text-white px-3 py-1.5 text-sm">CSV exportieren</button>
+          <h3 className="font-medium">Aggregierte Referenzen je Fertig‑Charge</h3>
+          <button
+            className="rounded bg-slate-800 text-white px-3 py-1.5 text-sm"
+            onClick={()=>{
+              exportCsv('dds_refs_by_finished_batch.csv', [
+                ['Produkt','MHD','Charge','DDS‑Refs'],
+                ...batches.map(b => [b.product_name, b.mhd_text ?? '', b.batch_code ?? '', b.dds_refs ?? ''])
+              ])
+            }}
+          >
+            CSV exportieren
+          </button>
         </div>
-        <table className="w-full border mt-3 text-sm">
+        <table className="w-full text-sm mt-3">
           <thead className="bg-slate-50">
             <tr>
-              <th className="p-2 text-left">Produkt</th>
-              <th className="p-2 text-left">MHD</th>
-              <th className="p-2 text-left">Charge</th>
-              <th className="p-2 text-left">DDS‑Refs</th>
+              <th className="text-left p-2">Produkt</th>
+              <th className="text-left p-2">MHD</th>
+              <th className="text-left p-2">Charge</th>
+              <th className="text-left p-2">DDS‑Refs</th>
             </tr>
           </thead>
           <tbody>
             {batches.map(b => (
-              <tr key={b.id} className="border-t">
+              <tr key={b.finished_batch_id} className="border-t">
                 <td className="p-2">{b.product_name}</td>
                 <td className="p-2">{b.mhd_text ?? '–'}</td>
                 <td className="p-2">{b.batch_code ?? '–'}</td>
-                <td className="p-2">{(b.eudr_refs ?? []).join(', ') || '–'}</td>
+                <td className="p-2">{b.dds_refs ?? '–'}</td>
               </tr>
             ))}
+            {batches.length === 0 && <tr><td className="p-2" colSpan={4}>Keine Daten.</td></tr>}
           </tbody>
         </table>
       </section>
+
+      {err && <div className="text-red-600 text-sm">{err}</div>}
     </div>
   )
 }
