@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import { Link } from 'react-router-dom'
 
 type Lot = {
   id: string
@@ -159,17 +160,30 @@ export default function Lots() {
             <th className="text-right p-2">Preis</th>
             <th className="text-left p-2">Währung</th>
             <th className="text-left p-2">Status</th>
+            <th className="p-2 text-left">Details</th>
           </tr>
         </thead>
         <tbody>
           {rows.map(r => (
             <tr key={r.id} className="border-t">
-              <td className="p-2">{r.short_desc ?? '–'}</td>
-              <td className="p-2">{r.origin_country ?? '–'}</td>
-              <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
-              <td className="p-2 text-right">{r.price_eur_per_kg != null ? r.price_eur_per_kg.toLocaleString('de-DE') : '–'}</td>
-              <td className="p-2">{r.price_currency ?? '–'}</td>
-              <td className="p-2">{r.status ?? '–'}</td>
+              <td className="p-2">{r.short_desc ?? '–'}
+                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
+              </td>
+              <td className="p-2">{r.origin_country ?? '–'}
+                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
+              </td>
+              <td className="p-2">{r.organic ? 'Ja' : 'Nein'}
+                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
+              </td>
+              <td className="p-2 text-right">{r.price_eur_per_kg != null ? r.price_eur_per_kg.toLocaleString('de-DE') : '–'}
+                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
+              </td>
+              <td className="p-2">{r.price_currency ?? '–'}
+                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
+              </td>
+              <td className="p-2">{r.status ?? '–'}
+                <Link className="text-sky-700 underline" to={`/lots/${r.id}`}>öffnen</Link>
+              </td>
             </tr>
           ))}
         </tbody>
