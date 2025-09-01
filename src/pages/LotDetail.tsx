@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 import L, { GeoJSON as LGeoJSON } from 'leaflet'
@@ -21,9 +21,9 @@ export default function LotDetail() {
   const layerRef = useRef<LGeoJSON | null>(null)
   const mapDivRef = useRef<HTMLDivElement | null>(null)
 
+  // Karte initialisieren
   useEffect(() => {
     if (!mapDivRef.current || mapRef.current) return
-    // Grundkarte
     mapRef.current = L.map(mapDivRef.current).setView([0, 0], 2)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap'
@@ -31,60 +31,52 @@ export default function LotDetail() {
     layerRef.current = L.geoJSON().addTo(mapRef.current)
   }, [])
 
-  useEffect(() => {
-    let mounted = true
-    async function load() {
-      if (!id) return
-      setErr(null)
-      const [lotRes, plotRes, farmRes] = await Promise.all([
-        supabase.from('green_lots').select('id, short_desc, origin_country').eq('id', id).single(),
-        supabase.from('v_lot_plots_geojson').select('plot_id, geojson, area_ha').eq('green_lot_id', id),
-        supabase.from('farms').select('id, name').order('name')
-      ])
-      if (!mounted) return
-      if (lotRes.error) setErr(lotRes.error.message)
-      if (plotRes.error) setErr(plotRes.error.message || null)
-      if (farmRes.error) setErr(farmRes.error.message || null)
+  // Daten laden
+  async function reload() {
+    if (!id) return
+    setErr(null)
+    const [lotRes, plotRes, farmRes] = await Promise.all([
+      supabase.from('green_lots').select('id, short_desc, origin_country').eq('id', id).single(),
+      supabase.from('v_lot_plots_geojson').select('plot_id, geojson, area_ha').eq('green_lot_id', id),
+      supabase.from('farms').select('id, name').order('name')
+    ])
+    if (lotRes.error) setErr(lotRes.error.message)
+    if (plotRes.error) setErr(plotRes.error.message || null)
+    if (farmRes.error) setErr(farmRes.error.message || null)
+    setLot(lotRes.data ?? null)
+    setPlots(plotRes.data ?? [])
+    setFarms(farmRes.data ?? [])
+  }
+  useEffect(() => { reload() }, [id]) // eslint-disable-line
 
-      setLot(lotRes.data ?? null)
-      setPlots(plotRes.data ?? [])
-      setFarms(farmRes.data ?? [])
-    }
-    load()
-    return () => { mounted = false }
-  }, [id])
-
-  // Karte mit Plots rendern
+  // Plots in Karte darstellen
   useEffect(() => {
     const map = mapRef.current
     const layer = layerRef.current
     if (!map || !layer) return
     layer.clearLayers()
     if (plots.length > 0) {
-      const gj = { type: 'FeatureCollection', features: plots.map(p => ({ type:'Feature', geometry: p.geojson, properties: { plot_id: p.plot_id } })) }
+      const gj = {
+        type: 'FeatureCollection',
+        features: plots.map(p => ({ type: 'Feature', geometry: p.geojson, properties: { plot_id: p.plot_id } }))
+      } as any
       const gjLayer = L.geoJSON(gj)
       gjLayer.addTo(map)
       layerRef.current = gjLayer
-      try {
-        map.fitBounds(gjLayer.getBounds(), { padding: [20,20] })
-      } catch { /* bounds könnten leer sein */ }
+      try { map.fitBounds(gjLayer.getBounds(), { padding: [20, 20] }) } catch { /* ignore */ }
     }
   }, [plots])
 
   async function ensureFarm(): Promise<string> {
     if (farmId) return farmId
-    // wähle existierende Farm oder lege eine Default-Farm an
-    if (farms[0]) {
-      setFarmId(farms[0].id)
-      return farms[0].id
-    }
-    // Default-Farm erzeugen (Minimal)
+    if (farms[0]) { setFarmId(farms[0].id); return farms[0].id }
     const { data: prof } = await supabase.from('profiles').select('org_id').single()
     const name = `Upload Farm (${lot?.short_desc ?? id?.slice(0,6)})`
-    const { data, error } = await supabase.from('farms').insert([{ org_id: prof?.org_id, name, country: lot?.origin_country ?? null }]).select('id').single()
+    const { data, error } = await supabase.from('farms')
+      .insert([{ org_id: prof?.org_id, name, country: lot?.origin_country ?? null }])
+      .select('id').single()
     if (error) throw error
-    setFarms([{ id: data!.id, name }])
-    setFarmId(data!.id)
+    setFarms([{ id: data!.id, name }]); setFarmId(data!.id)
     return data!.id
   }
 
@@ -94,7 +86,6 @@ export default function LotDetail() {
       const text = await file.text()
       const json = JSON.parse(text)
       const fid = await ensureFarm()
-      // Akzeptiere FeatureCollection oder Feature oder nackte Geometrie
       const features: any[] =
         json.type === 'FeatureCollection' ? json.features :
         json.type === 'Feature' ? [json] : [json]
@@ -107,15 +98,37 @@ export default function LotDetail() {
         })
         if (error) throw error
       }
-      // nachladen
-      const { data: re } = await supabase.from('v_lot_plots_geojson').select('plot_id, geojson, area_ha').eq('green_lot_id', id!)
-      setPlots(re ?? [])
+      await supabase.rpc('recalc_lot_areas', { p_green_lot_id: id }) // gleich Flächen setzen
+      await reload()
       alert('GeoJSON importiert.')
-    } catch (e: any) {
+    } catch (e:any) {
       setErr(e.message ?? String(e))
     } finally {
       setBusy(false)
     }
+  }
+
+  async function recalcAreas() {
+    try {
+      setBusy(true); setErr(null)
+      await supabase.rpc('recalc_lot_areas', { p_green_lot_id: id })
+      await reload()
+    } catch (e:any) {
+      setErr(e.message ?? String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function exportGeoJSON() {
+    const fc = {
+      type: 'FeatureCollection',
+      features: plots.map(p => ({ type: 'Feature', geometry: p.geojson, properties: { plot_id: p.plot_id, area_ha: p.area_ha } }))
+    }
+    const blob = new Blob([JSON.stringify(fc)], { type: 'application/geo+json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `lot_${id}.geojson`; a.click()
+    URL.revokeObjectURL(url)
   }
 
   if (!id) return <div>Kein Lot gewählt.</div>
@@ -130,10 +143,13 @@ export default function LotDetail() {
         </div>
       ) : <div>Lade Lot…</div>}
 
+      <div className="flex gap-3">
+        <button onClick={recalcAreas} className="rounded bg-slate-200 px-3 py-1 text-sm">Flächen berechnen/aktualisieren</button>
+        <button onClick={exportGeoJSON} className="rounded bg-slate-200 px-3 py-1 text-sm">GeoJSON exportieren</button>
+      </div>
+
       <div className="grid grid-cols-[1fr_300px] gap-4">
-        <div>
-          <div ref={mapDivRef} className="border rounded overflow-hidden leaflet-container" />
-        </div>
+        <div><div ref={mapDivRef} className="border rounded overflow-hidden leaflet-container" /></div>
         <div className="space-y-3">
           <div className="text-sm">
             <label className="block mb-1 font-medium">Farm für neue Plots</label>
@@ -141,14 +157,12 @@ export default function LotDetail() {
               <option value="">(automatisch anlegen)</option>
               {farms.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
-            <div className="text-xs text-slate-500 mt-1">Wird keine Farm gewählt, wird eine Minimal‑Farm automatisch erzeugt.</div>
           </div>
 
           <div className="text-sm">
             <label className="block mb-1 font-medium">GeoJSON hochladen</label>
-            <input type="file" accept=".geojson,application/geo+json,application/json" onChange={e => {
-              const file = e.target.files?.[0]; if (file) onFileChosen(file)
-            }}/>
+            <input type="file" accept=".geojson,application/geo+json,application/json"
+              onChange={e => { const file = e.target.files?.[0]; if (file) onFileChosen(file) }}/>
           </div>
 
           <div className="text-sm">
@@ -160,7 +174,7 @@ export default function LotDetail() {
           </div>
 
           {err && <div className="text-red-600 text-sm">{err}</div>}
-          {busy && <div className="text-sm">Import läuft…</div>}
+          {busy && <div className="text-sm">Bitte warten…</div>}
         </div>
       </div>
     </div>
