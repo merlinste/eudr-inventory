@@ -77,11 +77,12 @@ export default function Productions() {
   const whOptions: Option[] = useMemo(() => warehouses.map(w => ({ value: w.id, label: w.name })), [warehouses])
   const lotOptions: Option[] = useMemo(() => lots.map(l => ({ value: l.id, label: l.short_desc ?? l.id.slice(0,6) })), [lots])
 
-  async function getMyOrgId(): Promise<string> {
-    const { data, error } = await supabase.from('profiles').select('org_id').single()
-    if (error || !data) throw error ?? new Error('org_id nicht gefunden')
-    return data.org_id
-  }
+async function getMyOrgId(): Promise<string> {
+  const { data, error } = await supabase.from('profiles').select('org_id').maybeSingle()
+  if (error) throw error
+  if (!data?.org_id) throw new Error('Kein Profileintrag gefunden – bitte Admin verknüpft deinen User mit einer Organisation.')
+  return data.org_id
+}
 
   function addInputRow() { setInputs(prev => [...prev, { lot_id: '', qty_kg: '' }]) }
   function updateInputRow(i: number, patch: Partial<{lot_id: string; qty_kg: string}>) {
