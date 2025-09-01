@@ -1,8 +1,16 @@
+import { useNavigate, Link } from 'react-router-dom';
+const nav = useNavigate()
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 import L, { GeoJSON as LGeoJSON } from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+
+<div className="mb-3 text-sm">
+  <button onClick={()=>nav(-1)} className="text-sky-700 underline">← zurück</button>
+  <span className="mx-2 text-slate-400">·</span>
+  <Link to="/lots" className="text-sky-700 underline">Zur Liste</Link>
+</div>
 
 type Lot = { id: string; short_desc: string | null; origin_country: string | null }
 type PlotRow = { plot_id: string; geojson: any; area_ha: number | null }
