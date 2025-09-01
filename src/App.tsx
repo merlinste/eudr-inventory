@@ -8,6 +8,7 @@ import Lots from './pages/Lots'
 import Productions from './pages/Productions'
 import EUDR from './pages/EUDR'
 import Partners from './pages/Partners'
+import AuthCallback from './pages/AuthCallback'
 
 export default function App() {
   const [loading, setLoading] = useState(true)
@@ -29,6 +30,7 @@ export default function App() {
 
   return (
     <Routes>
+      <Route path="auth/callback" element={<AuthCallback />} />
       <Route path="/login" element={<Login />} />
       <Route
         path="/*"
