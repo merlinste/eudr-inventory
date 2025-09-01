@@ -7,18 +7,6 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  return (
-    <div className="min-h-full flex items-center justify-center p-6">
-      <div className="w-full max-w-sm space-y-4">
-        <div className="flex justify-center mb-2">
-          <img src={logoUrl} alt="earlybird coffee" className="h-10 w-auto" />
-        </div>
-        <h1 className="text-xl text-center">Anmeldung</h1>
-        {/* Buttons/Form ... */}
-      </div>
-    </div>
-  )
-}
 
   async function signInPassword(e: FormEvent) {
     e.preventDefault()
@@ -28,23 +16,28 @@ export default function Login() {
     setBusy(false)
   }
 
-async function signInAzure() {
-  const origin = window.location.origin
-  const next = '/inventory' // wohin nach erfolgreichem Login
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: 'azure',
-    options: {
-      scopes: 'email',
-      redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`
-    }
-  })
-  if (error) setError(error.message)
-}
+  async function signInAzure() {
+    setBusy(true); setError(null)
+    const origin = window.location.origin
+    const next = '/inventory'
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'azure',
+      options: {
+        scopes: 'email',
+        redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`
+      }
+    })
+    if (error) setError(error.message)
+    setBusy(false)
+  }
 
   return (
     <div className="min-h-full flex items-center justify-center p-6">
       <div className="w-full max-w-sm space-y-4">
-        <h1 className="text-xl">Anmeldung</h1>
+        <div className="flex justify-center">
+          <img src={logoUrl} alt="earlybird coffee" className="h-10 w-auto" />
+        </div>
+        <h1 className="text-xl text-center">Anmeldung</h1>
 
         <button
           onClick={signInAzure}
@@ -73,7 +66,10 @@ async function signInAzure() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
-          <button className="w-full rounded bg-slate-800 text-white py-2" disabled={busy}>
+          <button
+            className="w-full rounded bg-slate-800 text-white py-2"
+            disabled={busy}
+          >
             Login
           </button>
         </form>
