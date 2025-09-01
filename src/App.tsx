@@ -8,10 +8,10 @@ import Lots from '@/pages/Lots'
 import LotDetail from '@/pages/LotDetail'
 import Productions from '@/pages/Productions'
 import Partners from '@/pages/Partners'
-import Eudr from '@/pages/Eudr'          // <-- genau so (Datei: src/pages/Eudr.tsx)
+import Eudr from '@/pages/Eudr'          // << Datei heißt genau: src/pages/Eudr.tsx
 import Warehouses from '@/pages/Warehouses'
 import Products from '@/pages/Products'
-import AdminUsers from '@/pages/AdminUsers'  // falls noch nicht vorhanden: Datei unten
+import AdminUsers from '@/pages/AdminUsers'  // falls noch nicht vorhanden: siehe unten
 
 export default function App() {
   return (
@@ -20,7 +20,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route element={<RequireAuth><Shell /></RequireAuth>}>
           <Route index element={<Navigate to="/stock" replace />} />
-          <Route path="/stock" element={<StockPage />} /> {/* einfache Bestandsseite, siehe unten */}
+          <Route path="/stock" element={<StockPage />} />
           <Route path="/lots" element={<Lots />} />
           <Route path="/lots/:id" element={<LotDetail />} />
           <Route path="/productions" element={<Productions />} />
@@ -36,20 +36,19 @@ export default function App() {
   )
 }
 
-// --- kleiner Auth‑Guard, damit /login sauber geschützt ist
+// --- Auth-Guard
 function RequireAuth({ children }: { children: JSX.Element }) {
   const [ready, setReady] = useState(false)
   const [authed, setAuthed] = useState(false)
 
   useEffect(() => {
-    let unsub = supabase.auth.onAuthStateChange((_e, s) => {
-      setAuthed(!!s)
-      setReady(true)
+    const sub = supabase.auth.onAuthStateChange((_e, s) => {
+      setAuthed(!!s); setReady(true)
     })
     supabase.auth.getSession().then(({ data }) => {
       setAuthed(!!data.session); setReady(true)
     })
-    return () => { unsub.data.subscription.unsubscribe() }
+    return () => { sub.data.subscription.unsubscribe() }
   }, [])
 
   if (!ready) return <div className="p-6">Lade…</div>
@@ -57,7 +56,6 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children
 }
 
-// sehr einfache „Bestand“-Seite, bis deine bestehende Seite eingebunden ist
 function StockPage() {
   return <div className="text-sm text-slate-700">Rohkaffee‑Bestand und Fertigwaren findest du in den jeweiligen Reitern.</div>
 }
