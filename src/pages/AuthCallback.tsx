@@ -10,7 +10,6 @@ export default function AuthCallback() {
     const next = sp.get('next') || '/inventory'
     const code = sp.get('code')
 
-    // 1) Bevorzugt: PKCE (?code=...)
     if (code) {
       supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
         if (error) nav('/login?error=callback_failed', { replace: true })
@@ -19,23 +18,18 @@ export default function AuthCallback() {
       return
     }
 
-    // 2) Fallback: Implicit-Flow (#access_token=... im Hash)
     const hash = window.location.hash?.slice(1) || ''
     const hp = new URLSearchParams(hash)
     const access_token = hp.get('access_token')
     const refresh_token = hp.get('refresh_token')
 
     if (access_token && refresh_token) {
-      supabase.auth
-        .setSession({ access_token, refresh_token })
-        .then(({ error }) => {
-          if (error) nav('/login?error=callback_failed', { replace: true })
-          else nav(next, { replace: true })
-        })
+      supabase.auth.setSession({ access_token, refresh_token }).then(({ error }) => {
+        if (error) nav('/login?error=callback_failed', { replace: true })
+        else nav(next, { replace: true })
+      })
       return
     }
-
-    // 3) Nichts Verwertbares -> zurück zum Login
     nav('/login?error=missing_params', { replace: true })
   }, [nav, sp])
 
