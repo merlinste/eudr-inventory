@@ -30,7 +30,7 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="auth/callback" element={<AuthCallback />} />
       <Route path="/login" element={<Login />} />
       <Route
         path="/*"
