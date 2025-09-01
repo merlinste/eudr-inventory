@@ -1,16 +1,8 @@
-import { useNavigate, Link } from 'react-router-dom';
-const nav = useNavigate()
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 import L, { GeoJSON as LGeoJSON } from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-
-<div className="mb-3 text-sm">
-  <button onClick={()=>nav(-1)} className="text-sky-700 underline">← zurück</button>
-  <span className="mx-2 text-slate-400">·</span>
-  <Link to="/lots" className="text-sky-700 underline">Zur Liste</Link>
-</div>
 
 type Lot = { id: string; short_desc: string | null; origin_country: string | null }
 type PlotRow = { plot_id: string; geojson: any; area_ha: number | null }
@@ -19,6 +11,7 @@ type EudrPkg = { dds_reference: string | null; production_start: string | null; 
 type UsageRow = { finished_batch_id: string; product_name: string; batch_code: string | null; mhd_text: string | null; run_date: string | null }
 
 export default function LotDetail() {
+  const nav = useNavigate()
   const { id } = useParams<{ id: string }>()
   const [tab, setTab] = useState<'map' | 'eudr'>('map')
 
@@ -26,10 +19,8 @@ export default function LotDetail() {
   const [plots, setPlots] = useState<PlotRow[]>([])
   const [farms, setFarms] = useState<Farm[]>([])
   const [farmId, setFarmId] = useState<string>('')
-
   const [eudr, setEudr] = useState<EudrPkg | null>(null)
   const [usage, setUsage] = useState<UsageRow[]>([])
-
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -38,7 +29,7 @@ export default function LotDetail() {
   const layerRef = useRef<LGeoJSON | null>(null)
   const mapDivRef = useRef<HTMLDivElement | null>(null)
 
-  // --- INIT MAP
+  // Init map
   useEffect(() => {
     if (!mapDivRef.current || mapRef.current) return
     mapRef.current = L.map(mapDivRef.current).setView([0, 0], 2)
@@ -48,7 +39,6 @@ export default function LotDetail() {
     layerRef.current = L.geoJSON().addTo(mapRef.current)
   }, [])
 
-  // --- LOAD
   async function reload() {
     if (!id) return
     setErr(null)
@@ -73,22 +63,21 @@ export default function LotDetail() {
   }
   useEffect(() => { reload() }, [id]) // eslint-disable-line
 
-  // --- RENDER PLOTS
+  // Render plots on map
   useEffect(() => {
     const map = mapRef.current
     const layer = layerRef.current
     if (!map || !layer) return
     layer.clearLayers()
     if (plots.length > 0) {
-      const gj = { type: 'FeatureCollection', features: plots.map(p => ({ type:'Feature', geometry: p.geojson, properties: { plot_id: p.plot_id } })) } as any
-      const gjLayer = L.geoJSON(gj)
+      const fc = { type: 'FeatureCollection', features: plots.map(p => ({ type:'Feature', geometry: p.geojson, properties: { plot_id: p.plot_id } })) } as any
+      const gjLayer = L.geoJSON(fc)
       gjLayer.addTo(map)
-      layerRef.current = gjLayer
+      ;(layerRef as any).current = gjLayer
       try { map.fitBounds(gjLayer.getBounds(), { padding: [20,20] }) } catch {}
     }
   }, [plots])
 
-  // --- HELPERS
   async function ensureFarm(): Promise<string> {
     if (farmId) return farmId
     if (farms[0]) { setFarmId(farms[0].id); return farms[0].id }
@@ -136,7 +125,7 @@ export default function LotDetail() {
     setBusy(false)
   }
 
-  // --- EUDR
+  // EUDR
   const [form, setForm] = useState({ dds_reference: '', production_start: '', production_end: '' })
   useEffect(() => {
     setForm({
@@ -174,28 +163,17 @@ export default function LotDetail() {
     }
   }
 
-  function copyRefs() {
-    const txt = form.dds_reference?.trim() ? form.dds_reference.trim() : ''
-    if (!txt) return
-    navigator.clipboard.writeText(txt)
-  }
-
-  function exportUsageCsv() {
-    const header = ['batch_id','produkt','charge','mhd','datum']
-    const rows = usage.map(u => [u.finished_batch_id, wrap(u.product_name), wrap(u.batch_code), wrap(u.mhd_text), u.run_date ?? ''])
-    downloadCsv(`lot_${id}_usage.csv`, [header, ...rows])
-  }
-  function wrap(v: string | null | undefined) { return v == null ? '' : `"${String(v).replace(/"/g,'""')}"` }
-  function downloadCsv(name: string, data: (string|number)[][]) {
-    const csv = data.map(r => r.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
-  }
-
   if (!id) return <div>Kein Lot gewählt.</div>
 
   return (
     <div className="space-y-4">
+      {/* Breadcrumb / zurück */}
+      <div className="text-sm">
+        <button onClick={()=>nav(-1)} className="text-sky-700 underline">← zurück</button>
+        <span className="mx-2 text-slate-400">·</span>
+        <Link to="/lots" className="text-sky-700 underline">Zur Liste</Link>
+      </div>
+
       <h2 className="text-lg font-medium">Lot‑Details</h2>
       {lot ? (
         <div className="text-sm text-slate-700">
@@ -217,7 +195,7 @@ export default function LotDetail() {
             <button onClick={exportGeoJSON} className="rounded bg-slate-200 px-3 py-1 text-sm">GeoJSON exportieren</button>
           </div>
           <div className="grid grid-cols-[1fr_300px] gap-4">
-            <div><div ref={mapDivRef} className="border rounded overflow-hidden leaflet-container" /></div>
+            <div><div ref={mapDivRef} className="border rounded overflow-hidden leaflet-container" style={{height:'520px'}} /></div>
             <div className="space-y-3">
               <div className="text-sm">
                 <label className="block mb-1 font-medium">Farm für neue Plots</label>
@@ -254,9 +232,6 @@ export default function LotDetail() {
                 <input className="border rounded px-3 py-2 w-full" placeholder="z. B. EUDR‑REF‑123"
                   value={form.dds_reference} onChange={e=>setForm({...form, dds_reference: e.target.value})}/>
               </label>
-              <div className="flex items-end gap-2">
-                <button onClick={copyRefs} className="rounded bg-slate-200 px-3 py-2 text-sm h-10">kopieren</button>
-              </div>
               <label> Produktion Start
                 <input type="date" className="border rounded px-3 py-2 w-full"
                   value={form.production_start ?? ''} onChange={e=>setForm({...form, production_start: e.target.value})}/>
@@ -275,10 +250,7 @@ export default function LotDetail() {
           </section>
 
           <section className="border rounded p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-medium">Verwendung in Fertig‑Chargen</h3>
-              <button onClick={exportUsageCsv} className="rounded bg-slate-200 px-3 py-1 text-sm">CSV exportieren</button>
-            </div>
+            <div className="font-medium">Verwendungen in Fertig‑Chargen</div>
             <table className="w-full border mt-3 text-sm">
               <thead className="bg-slate-50">
                 <tr>
