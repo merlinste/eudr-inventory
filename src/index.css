@@ -1,5 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+@import 'leaflet/dist/leaflet.css';
+
+/* Eine simple Höhe für die Karte */
+.leaflet-container { height: 420px; }
 
 html, body, #root { height: 100%; }
