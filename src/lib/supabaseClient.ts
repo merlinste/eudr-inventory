@@ -1,21 +1,31 @@
-import { createClient } from '@supabase/supabase-js'
+// src/lib/supabaseClient.ts
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
-const url = import.meta.env.VITE_SUPABASE_URL
-const anon = import.meta.env.VITE_SUPABASE_ANON_KEY
+// Vite stellt import.meta.env bereit; wir casten defensiv auf string
+const SUPABASE_URL: string = (import.meta.env.VITE_SUPABASE_URL ?? '') as string
+const SUPABASE_ANON_KEY: string = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '') as string
 
-if (!url || !anon) {
-  // sichtbarer Hinweis im Browser + Console
-  const msg = 'Supabase-Env fehlt: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY'
+// Freundlicher Hinweis im Browser, falls Variablen fehlen (anstatt "weißer Seite")
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  const msg = 'Supabase-Umgebungsvariablen fehlen: VITE_SUPABASE_URL und/oder VITE_SUPABASE_ANON_KEY.'
   // eslint-disable-next-line no-console
-  console.error(msg, { url, anon })
-  // simple Banner-Ausgabe:
-  const el = document.getElementById('root')
-  if (el) el.innerHTML = `<div style="padding:16px;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca">
-    <b>Konfiguration fehlt</b><br>${msg}
-  </div>`
+  console.error(msg, { SUPABASE_URL_present: !!SUPABASE_URL, SUPABASE_ANON_KEY_present: !!SUPABASE_ANON_KEY })
+  if (typeof document !== 'undefined') {
+    const root = document.getElementById('root')
+    if (root) {
+      root.innerHTML = `
+        <div style="padding:16px;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:6px">
+          <b>Konfiguration fehlt</b><br/>
+          ${msg}
+        </div>`
+    }
+  }
 }
 
-// @ts-expect-error url/anon werden bei Netlify gesetzt
-export const supabase = createClient(url, anon, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true, // wichtig für Azure-Redirect
+  },
 })
