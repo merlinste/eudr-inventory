@@ -1,11 +1,24 @@
 import { FormEvent, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import logoUrl from '@/assets/earlybird-logo.png'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  return (
+    <div className="min-h-full flex items-center justify-center p-6">
+      <div className="w-full max-w-sm space-y-4">
+        <div className="flex justify-center mb-2">
+          <img src={logoUrl} alt="earlybird coffee" className="h-10 w-auto" />
+        </div>
+        <h1 className="text-xl text-center">Anmeldung</h1>
+        {/* Buttons/Form ... */}
+      </div>
+    </div>
+  )
+}
 
   async function signInPassword(e: FormEvent) {
     e.preventDefault()
