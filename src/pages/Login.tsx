@@ -15,12 +15,9 @@ export default function Login() {
     setBusy(false)
   }
 
- async function signInAzure() {
+async function signInAzure() {
   const origin = window.location.origin
-  // Wohin nach erfolgreichem Login? Entweder die vorherige Route (next) oder z. B. "/inventory"
-  const params = new URLSearchParams(window.location.search)
-  const next = params.get('next') ?? '/inventory'
-
+  const next = '/inventory' // wohin nach erfolgreichem Login
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'azure',
     options: {
