@@ -1,10 +1,24 @@
 import { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
+import logoUrl from '@/assets/earlybird-logo.png'
 
 export default function Dashboard({ children }: { children: ReactNode }) {
   const nav = useNavigate()
   const loc = useLocation()
+  return (
+    <div className="min-h-full grid grid-cols-[220px_1fr]">
+      <aside className="border-r p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <img src={logoUrl} alt="earlybird coffee" className="h-8 w-auto" />
+          <span className="text-sm text-slate-600">inventory</span>
+        </div>
+        {/* nav ... */}
+      </aside>
+      <main className="p-6">{children}</main>
+    </div>
+  )
+}
 
   async function signOut() {
     await supabase.auth.signOut()
