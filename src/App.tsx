@@ -11,6 +11,9 @@ import Partners from './pages/Partners'
 import AuthCallback from './pages/AuthCallback'
 import LotDetail from './pages/LotDetail'
 import AdminUsers from '@/pages/AdminUsers'
+import LotDetail from '@/pages/LotDetail'
+import Eudr from '@/pages/Eudr'
+import Partners from '@/pages/Partners'
 
 export default function App() {
   const [loading, setLoading] = useState(true)
@@ -43,6 +46,10 @@ export default function App() {
         <Route path="/productions" element={<Productions/>} />
         <Route path="/partners" element={<Partners/>} />
         <Route path="/eudr" element={<Eudr/>} />
+        <Route path="/lots" element={<Lots/>} />
+        <Route path="/lots/:id" element={<LotDetail/>} />
+        <Route path="/eudr" element={<Eudr/>} />
+        <Route path="/partners" element={<Partners/>} />
 </Route>
 <Route path="/login" element={<Login/>} />
       <Route
