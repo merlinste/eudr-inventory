@@ -53,11 +53,12 @@ export default function Lots() {
   }, [])
 
   // Helper: eigene org_id holen (für Inserts)
-  async function getMyOrgId(): Promise<string> {
-    const { data, error } = await supabase.from('profiles').select('org_id').single()
-    if (error || !data) throw error ?? new Error('org_id nicht gefunden')
-    return data.org_id
-  }
+async function getMyOrgId(): Promise<string> {
+  const { data, error } = await supabase.from('profiles').select('org_id').maybeSingle()
+  if (error) throw error
+  if (!data?.org_id) throw new Error('Kein Profileintrag gefunden – bitte Admin verknüpft deinen User mit einer Organisation.')
+  return data.org_id
+}
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()
