@@ -38,17 +38,28 @@ export default function Partners() {
 
   const producerOptions = useMemo(() => orgs.filter(o => o.kind === 'producer'), [orgs])
 
-  async function createPartner(e: FormEvent) {
-    e.preventDefault()
-    setErr(null)
-    const { error } = await supabase.from('organizations').insert([form as any])
-    if (error) setErr(error.message)
-    else {
-      const { data } = await supabase.from('organizations').select('id, name, kind, size').order('name')
-      setOrgs(data ?? [])
-      setForm({ name: '', kind: 'producer', size: 'sme' })
-    }
+async function createPartner(e: FormEvent) {
+  e.preventDefault()
+  setErr(null)
+  const { error } = await supabase.rpc('create_partner_org', {
+    p_name: form.name,
+    p_kind: form.kind,
+    p_size: form.size,
+    p_country: null
+  })
+  if (error) {
+    setErr(error.message)
+  } else {
+    // Liste neu laden
+    const { data, error: e2 } = await supabase
+      .from('organizations')
+      .select('id, name, kind, size')
+      .order('name')
+    if (e2) setErr(e2.message)
+    setOrgs(data ?? [])
+    setForm({ name: '', kind: 'producer', size: 'sme' })
   }
+}
 
   async function assignLots() {
     try {
