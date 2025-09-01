@@ -34,7 +34,7 @@ export default function Shell() {
           <span>inventory</span>
         </div>
         <nav className="flex flex-col gap-1 text-sm">
-          <NavLink to="/" end className={cls}>Bestand</NavLink>
+          <NavLink to="/stock" className={cls}>Bestand</NavLink>
           <NavLink to="/lots" className={cls}>Lots</NavLink>
           <NavLink to="/productions" className={cls}>Produktionen</NavLink>
           <NavLink to="/eudr" className={cls}>EUDR</NavLink>
