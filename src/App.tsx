@@ -1,76 +1,63 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { supabase } from './lib/supabaseClient'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Inventory from './pages/Inventory'
-import Lots from './pages/Lots'
-import Productions from './pages/Productions'
-import EUDR from './pages/EUDR'
-import Partners from './pages/Partners'
-import AuthCallback from './pages/AuthCallback'
-import LotDetail from './pages/LotDetail'
-import AdminUsers from '@/pages/AdminUsers'
+import { supabase } from '@/lib/supabaseClient'
+import Shell from '@/components/Shell'
+
+import Login from '@/pages/Login'
+import Lots from '@/pages/Lots'
 import LotDetail from '@/pages/LotDetail'
-import Eudr from '@/pages/Eudr'
+import Productions from '@/pages/Productions'
 import Partners from '@/pages/Partners'
+import Eudr from '@/pages/Eudr'          // <-- genau so (Datei: src/pages/Eudr.tsx)
+import Warehouses from '@/pages/Warehouses'
+import Products from '@/pages/Products'
+import AdminUsers from '@/pages/AdminUsers'  // falls noch nicht vorhanden: Datei unten
 
 export default function App() {
-  const [loading, setLoading] = useState(true)
-  const [isAuthed, setIsAuthed] = useState(false)
-  const location = useLocation()
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route element={<RequireAuth><Shell /></RequireAuth>}>
+          <Route index element={<Navigate to="/stock" replace />} />
+          <Route path="/stock" element={<StockPage />} /> {/* einfache Bestandsseite, siehe unten */}
+          <Route path="/lots" element={<Lots />} />
+          <Route path="/lots/:id" element={<LotDetail />} />
+          <Route path="/productions" element={<Productions />} />
+          <Route path="/partners" element={<Partners />} />
+          <Route path="/eudr" element={<Eudr />} />
+          <Route path="/warehouses" element={<Warehouses />} />
+          <Route path="/products" element={<Products />} />
+          <Route path="/admin/users" element={<AdminUsers />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+// --- kleiner Auth‑Guard, damit /login sauber geschützt ist
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const [ready, setReady] = useState(false)
+  const [authed, setAuthed] = useState(false)
 
   useEffect(() => {
+    let unsub = supabase.auth.onAuthStateChange((_e, s) => {
+      setAuthed(!!s)
+      setReady(true)
+    })
     supabase.auth.getSession().then(({ data }) => {
-      setIsAuthed(!!data.session)
-      setLoading(false)
+      setAuthed(!!data.session); setReady(true)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setIsAuthed(!!session)
-    })
-    return () => sub.subscription.unsubscribe()
+    return () => { unsub.data.subscription.unsubscribe() }
   }, [])
 
-  if (loading) return <div className="p-6 text-slate-600">Lade…</div>
+  if (!ready) return <div className="p-6">Lade…</div>
+  if (!authed) return <Navigate to="/login" replace />
+  return children
+}
 
-  return (
-    <Routes>
-      <Route path="auth/callback" element={<AuthCallback />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/admin/users" element={<AdminUsers />} />
-      <Route path="lots/:id" element={<LotDetail />} />
-      <Route element={<Shell/>}>
-        <Route path="/" element={<Dashboard/>} />
-        <Route path="/lots" element={<Lots/>} />
-        <Route path="/lots/:id" element={<LotDetail/>} />  {/* jetzt in der Shell */}
-        <Route path="/productions" element={<Productions/>} />
-        <Route path="/partners" element={<Partners/>} />
-        <Route path="/eudr" element={<Eudr/>} />
-        <Route path="/lots" element={<Lots/>} />
-        <Route path="/lots/:id" element={<LotDetail/>} />
-        <Route path="/eudr" element={<Eudr/>} />
-        <Route path="/partners" element={<Partners/>} />
-</Route>
-<Route path="/login" element={<Login/>} />
-      <Route
-        path="/*"
-        element={
-          isAuthed ? (
-            <Dashboard>
-              <Routes>
-                <Route index element={<Navigate to="inventory" replace />} />
-                <Route path="inventory" element={<Inventory />} />
-                <Route path="lots" element={<Lots />} />
-                <Route path="productions" element={<Productions />} />
-                <Route path="eudr" element={<EUDR />} />
-                <Route path="partners" element={<Partners />} />
-              </Routes>
-            </Dashboard>
-          ) : (
-            <Navigate to="/login" replace state={{ from: location.pathname }} />
-          )
-        }
-      />
-    </Routes>
-  )
+// sehr einfache „Bestand“-Seite, bis deine bestehende Seite eingebunden ist
+function StockPage() {
+  return <div className="text-sm text-slate-700">Rohkaffee‑Bestand und Fertigwaren findest du in den jeweiligen Reitern.</div>
 }
