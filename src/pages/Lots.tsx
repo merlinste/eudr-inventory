@@ -47,6 +47,7 @@ export default function Lots() {
 
   const [f, setF] = useState({
     short_desc: '',
+    external_contract_no: '',   // ⇐ NEU
     origin_country: '',
     organic: false,
     species: 'arabica' as 'arabica'|'robusta'|'other',
@@ -107,6 +108,7 @@ export default function Lots() {
       // Payload für green_lots
       const payload: any = {
         org_id: orgId,
+        external_contract_no: f.external_contract_no || null,
         short_desc: f.short_desc || null,
         origin_country: f.origin_country || null,
         organic: !!f.organic,
@@ -221,6 +223,16 @@ export default function Lots() {
                 placeholder="z. B. Peru coop xyz, 84+"
                 value={f.short_desc}
                 onChange={e => setF({ ...f, short_desc: e.target.value })}
+              />
+            </label>
+
+            <label className="text-sm">
+              Kontraktnummer Importeur/Händler
+              <input
+                className="border rounded px-3 py-2 w-full"
+                placeholder="frei"
+                value={f.external_contract_no}
+                onChange={e => setF({ ...f, external_contract_no: e.target.value })}
               />
             </label>
 
