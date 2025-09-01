@@ -15,15 +15,21 @@ export default function Login() {
     setBusy(false)
   }
 
-  async function signInAzure() {
-    setBusy(true); setError(null)
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'azure',
-      options: { scopes: 'email' }
-    })
-    if (error) setError(error.message)
-    setBusy(false)
-  }
+ async function signInAzure() {
+  const origin = window.location.origin
+  // Wohin nach erfolgreichem Login? Entweder die vorherige Route (next) oder z. B. "/inventory"
+  const params = new URLSearchParams(window.location.search)
+  const next = params.get('next') ?? '/inventory'
+
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'azure',
+    options: {
+      scopes: 'email',
+      redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`
+    }
+  })
+  if (error) setError(error.message)
+}
 
   return (
     <div className="min-h-full flex items-center justify-center p-6">
