@@ -43,11 +43,10 @@ type Form = {
 const COUNTRIES = [
   'Brazil','Colombia','Ethiopia','Vietnam','Honduras','Peru','Uganda','Mexico','Guatemala','Nicaragua',
   'Costa Rica','Kenya','Tanzania','Rwanda','Burundi','Panama','El Salvador','Indonesia','India',
-  'Papua New Guinea','Bolivia','Yemen','China','Dominican Republic','Congo','C\u00F4te d\u2019Ivoire'
+  'Papua New Guinea','Bolivia','Yemen','China','Dominican Republic','Congo',"Cote d'Ivoire"
 ]
 
-// KC = Mar, May, Jul, Sep, Dec; RC = Jan, Mar, May, Jul, Sep, Nov (ICE-Spezifikationen)
-// KC = 03,05,07,09,12 ; RC = 01,03,05,07,09,11. :contentReference[oaicite:2]{index=2}
+// KC: Mar, May, Jul, Sep, Dec.  RC: Jan, Mar, May, Jul, Sep, Nov. (ICE contract months)
 function futuresMonths(contract: 'KC'|'RC', count = 18): string[] {
   const allowed = contract === 'KC' ? [3,5,7,9,12] : [1,3,5,7,9,11]
   const out: string[] = []
@@ -74,14 +73,12 @@ export default function Lots() {
     organic: false,
     species: 'arabica',
     status: 'contracted',
-
-    price_scheme: 'fixed_eur',               // bewusst locker: kein Preiszwang
+    price_scheme: 'fixed_eur',
     price_fixed_eur_per_kg: '',
     price_fixed_usd_per_lb: '',
     price_diff_cents_per_lb: '',
     price_base_contract: 'KC',
     price_base_month: '',
-
     initial_warehouse_id: '',
     initial_kg: ''
   })
@@ -117,10 +114,9 @@ export default function Lots() {
   async function createLot() {
     setErr(null); setBusy(true)
     try {
-      // Sanfte Formularprüfung für Differential:
       if (form.price_scheme === 'differential') {
         if (!form.price_base_contract || !form.price_base_month || form.price_diff_cents_per_lb === '') {
-          throw new Error('Bitte Basis (KC/RC), Liefermonat und Differential (c/lb) ausfüllen.')
+          throw new Error('Bitte Basis (KC/RC), Liefermonat und Differential (c/lb) ausfuellen.')
         }
       }
 
@@ -157,7 +153,6 @@ export default function Lots() {
       if (ins.error) throw ins.error
       const newId = ins.data!.id as string
 
-      // Initialbestand buchen?
       const initKg = Number(form.initial_kg || '0')
       if (form.initial_warehouse_id && initKg > 0) {
         const mv = await supabase.from('inventory_moves').insert([{
@@ -167,13 +162,12 @@ export default function Lots() {
           delta_kg: initKg,
           warehouse_id: form.initial_warehouse_id,
           note: 'initial stock',
-          direction: 'in'    // wird auch per Trigger abgesichert
+          direction: 'in',
           reason: 'initial'
         }])
         if (mv.error) throw mv.error
       }
 
-      // Reset & Refresh
       setForm(f => ({
         ...f,
         short_desc: '',
@@ -195,7 +189,7 @@ export default function Lots() {
   }
 
   async function deleteLot(id: string) {
-    if (!confirm('Lot wirklich löschen?')) return
+    if (!confirm('Lot wirklich loeschen?')) return
     const res = await supabase.from('green_lots').delete().eq('id', id)
     if (res.error) alert(res.error.message)
     else setRows(prev => prev.filter(r => r.id !== id))
@@ -203,9 +197,8 @@ export default function Lots() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold">Rohkaffee‑Lots</h2>
+      <h2 className="text-lg font-semibold">Rohkaffee-Lots</h2>
 
-      {/* Filter */}
       <div className="flex items-center justify-between gap-3">
         <input className="border rounded px-3 py-2 w-full max-w-md text-sm"
                placeholder="Suche (Bezeichnung, Herkunft, DDS, Kontrakt)…"
@@ -213,7 +206,6 @@ export default function Lots() {
         <div className="text-sm text-slate-500">{filtered.length} von {rows.length}</div>
       </div>
 
-      {/* Tabelle */}
       <div className="border rounded overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
@@ -231,17 +223,17 @@ export default function Lots() {
           <tbody>
             {filtered.map(r => (
               <tr key={r.id} className="border-t">
-                <td className="p-2"><Link className="text-sky-700 hover:underline" to={`/lots/${r.id}`}>{r.short_desc ?? '—'}</Link></td>
-                <td className="p-2">{r.origin_country ?? '—'}</td>
+                <td className="p-2"><Link className="text-sky-700 hover:underline" to={`/lots/${r.id}`}>{r.short_desc ?? '-'}</Link></td>
+                <td className="p-2">{r.origin_country ?? '-'}</td>
                 <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
                 <td className="p-2">{r.species}</td>
-                <td className="p-2">{r.status ?? '—'}</td>
-                <td className="p-2">{r.dds_reference ?? '—'}</td>
-                <td className="p-2">{r.external_contract_no ?? '—'}</td>
+                <td className="p-2">{r.status ?? '-'}</td>
+                <td className="p-2">{r.dds_reference ?? '-'}</td>
+                <td className="p-2">{r.external_contract_no ?? '-'}</td>
                 <td className="p-2">
                   <div className="flex gap-2">
                     <Link className="rounded bg-slate-100 px-2 py-1 text-xs" to={`/lots/${r.id}`}>Details</Link>
-                    <button className="rounded bg-red-100 text-red-700 text-xs px-2 py-1" onClick={() => deleteLot(r.id)}>Löschen</button>
+                    <button className="rounded bg-red-100 text-red-700 text-xs px-2 py-1" onClick={() => deleteLot(r.id)}>Loeschen</button>
                   </div>
                 </td>
               </tr>
@@ -251,9 +243,9 @@ export default function Lots() {
         </table>
       </div>
 
-      {/* Neu anlegen */}
       <div className="border rounded p-4 space-y-4">
         <h3 className="font-medium">Neues Lot anlegen</h3>
+
         <div className="grid grid-cols-3 gap-3 text-sm">
           <label>Bezeichnung
             <input className="border rounded px-3 py-2 w-full"
@@ -267,7 +259,7 @@ export default function Lots() {
           </label>
           <label>Bio
             <select className="border rounded px-3 py-2 w-full"
-                    value={form.organic ? '1':'0'} onChange={e=>setForm(f=>({ ...f, organic: e.target.value==='1' }))}>
+                    value={form.organic ? '1':'0'} onChange={e=>setForm(f=>({ ...f, organic: e.target.value === '1' }))}>
               <option value="0">Nein</option>
               <option value="1">Ja</option>
             </select>
@@ -292,11 +284,11 @@ export default function Lots() {
               <option value="closed">Abgeschlossen</option>
             </select>
           </label>
-          <label>DDS‑Referenz
+          <label>DDS-Referenz
             <input className="border rounded px-3 py-2 w-full"
                    value={form.dds_reference} onChange={e=>setForm(f=>({ ...f, dds_reference: e.target.value }))} />
           </label>
-          <label>Kontraktnummer Importeur/Händler
+          <label>Kontraktnummer Importeur/Haendler
             <input className="border rounded px-3 py-2 w-full"
                    value={form.external_contract_no} onChange={e=>setForm(f=>({ ...f, external_contract_no: e.target.value }))} />
           </label>
@@ -311,7 +303,6 @@ export default function Lots() {
                       setForm(f=>({
                         ...f,
                         price_scheme: val,
-                        // irrelevante Felder leeren
                         price_fixed_eur_per_kg: val==='fixed_eur' ? f.price_fixed_eur_per_kg : '',
                         price_fixed_usd_per_lb: val==='fixed_usd' ? f.price_fixed_usd_per_lb : '',
                         price_diff_cents_per_lb: val==='differential' ? f.price_diff_cents_per_lb : '',
@@ -341,7 +332,7 @@ export default function Lots() {
 
           {form.price_scheme === 'differential' && (
             <>
-              <label>Basis (KC=Arabica / RC=Robusta)
+              <label>Basis (KC/RC)
                 <select className="border rounded px-3 py-2 w-full"
                         value={form.price_base_contract}
                         onChange={e=>setForm(f=>({ ...f, price_base_contract: e.target.value as Form['price_base_contract'] }))}>
@@ -353,11 +344,11 @@ export default function Lots() {
                 <select className="border rounded px-3 py-2 w-full"
                         value={form.price_base_month}
                         onChange={e=>setForm(f=>({ ...f, price_base_month: e.target.value }))}>
-                  <option value="">— wählen —</option>
+                  <option value="">- waehlen -</option>
                   {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
               </label>
-              <label>Differential (c/lb, +/‑)
+              <label>Differential (c/lb)
                 <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
                        value={form.price_diff_cents_per_lb}
                        onChange={e=>setForm(f=>({ ...f, price_diff_cents_per_lb: e.target.value }))} />
@@ -367,15 +358,15 @@ export default function Lots() {
         </div>
 
         <div className="grid grid-cols-3 gap-3 text-sm">
-          <label>Initial‑Lager (optional)
+          <label>Initial-Lager (optional)
             <select className="border rounded px-3 py-2 w-full"
                     value={form.initial_warehouse_id}
                     onChange={e=>setForm(f=>({ ...f, initial_warehouse_id: e.target.value }))}>
-              <option value="">—</option>
+              <option value="">-</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
           </label>
-          <label>Initial‑Menge (kg)
+          <label>Initial-Menge (kg)
             <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
                    value={form.initial_kg}
                    onChange={e=>setForm(f=>({ ...f, initial_kg: e.target.value }))} />
@@ -385,7 +376,7 @@ export default function Lots() {
         <div className="flex items-center justify-between">
           {err && <div className="text-red-600 text-sm">{err}</div>}
           <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={createLot} disabled={busy}>
-            {busy ? 'Speichere…' : 'Lot anlegen'}
+            {busy ? 'Speichere...' : 'Lot anlegen'}
           </button>
         </div>
       </div>
