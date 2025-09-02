@@ -187,8 +187,8 @@ export default function Productions() {
         delta_kg: -Math.abs(parseFloat(i.kg)),
         warehouse_id: whSource,
         production_run_id: runId,
-        note: 'production consumption'
-        direction: 'out' 
+        note: 'production consumption',
+        direction: 'out'            // <-- NEU
       }))
       const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
       if (mvIns.error) throw mvIns.error
@@ -349,12 +349,6 @@ export default function Productions() {
       </div>
     </div>
   )
-
-  function updateInput(i: number, patch: Partial<InputRow>) {
-    setInputs(prev => { const copy = [...prev]; copy[i] = { ...copy[i], ...patch }; return copy })
-  }
-  function addRow() { setInputs(prev => [...prev, { lot_id: '', kg: '' }]) }
-  function removeLast() { setInputs(prev => prev.slice(0, -1)) }
 }
 
 function fmtKg(n: number | null | undefined) {
