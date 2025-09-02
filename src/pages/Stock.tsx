@@ -24,7 +24,11 @@ type SumRow = {
   produced_kg: number
 }
 
-type Prices = { usd_eur: number | null; kc_usd_per_lb: number | null }
+type Prices = {
+  usd_eur: number | null
+  kc_usd_per_lb: number | null
+  rc_usd_per_ton: number | null     // ⇐ NEU
+}
 
 export default function Stock() {
   const [lots, setLots] = useState<Lot[]>([])
@@ -78,26 +82,39 @@ export default function Stock() {
     )
   }, [lots, q])
 
-  function priceEurPerKg(l: Lot): { value: number | null, note?: string } {
-    if (l.price_scheme === 'fixed_eur') return { value: l.price_fixed_eur_per_kg ?? null }
-    if (l.price_scheme === 'fixed_usd') {
-      if (l.price_fixed_usd_per_lb == null || prices.usd_eur == null) return { value: null }
-      const usdPerKg = l.price_fixed_usd_per_lb / 0.45359237
-      return { value: usdPerKg * prices.usd_eur }
-    }
-    if (l.price_scheme === 'differential') {
-      if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
-      if (l.diff_root === 'KC') {
-        if (prices.kc_usd_per_lb == null) return { value: null }
-        const usdLb = prices.kc_usd_per_lb + l.diff_value
-        const eurKg = (usdLb / 0.45359237) * prices.usd_eur
-        return { value: eurKg, note: 'KC (Front) + Diff' }
-      }
-      // RC/Diverses: MVP kein Feed
-      return { value: null, note: 'RC‑Preis N/A (MVP)' }
-    }
-    return { value: null }
+function priceEurPerKg(l: Lot): { value: number | null, note?: string } {
+  if (l.price_scheme === 'fixed_eur') {
+    return { value: l.price_fixed_eur_per_kg ?? null }
   }
+
+  if (l.price_scheme === 'fixed_usd') {
+    // Fixpreis in USD/lb (wie Feldname sagt); für Robusta ggf. getrenntes Feld einführen, wenn ihr USD/t braucht
+    if (l.price_fixed_usd_per_lb == null || prices.usd_eur == null) return { value: null }
+    const usdPerKg = l.price_fixed_usd_per_lb / 0.45359237
+    return { value: usdPerKg * prices.usd_eur }
+  }
+
+  if (l.price_scheme === 'differential') {
+    if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
+
+    if (l.diff_root === 'KC') {
+      if (prices.kc_usd_per_lb == null) return { value: null }
+      const usdLb = prices.kc_usd_per_lb + l.diff_value     // Diff in USD/lb
+      const eurKg = (usdLb / 0.45359237) * prices.usd_eur
+      return { value: eurKg, note: 'KC (Front) + Diff' }
+    }
+
+    if (l.diff_root === 'RC') {
+      if (prices.rc_usd_per_ton == null) return { value: null }
+      const usdPerTon = prices.rc_usd_per_ton + l.diff_value // Diff in USD/ton
+      const eurKg = (usdPerTon / 1000) * prices.usd_eur
+      return { value: eurKg, note: 'RC (Front) + Diff' }
+    }
+  }
+
+  return { value: null }
+}
+
 
   if (loading) return <div>Lade…</div>
 
@@ -115,7 +132,7 @@ export default function Stock() {
                placeholder="Suchen (Beschreibung, Herkunft)…"
                value={q} onChange={e=>setQ(e.target.value)} />
         <div className="text-xs text-slate-500">
-          FX USD→EUR: {fmt(prices.usd_eur)} · KC (USD/lb): {fmt(prices.kc_usd_per_lb)}
+          FX USD→EUR: {fmt(prices.usd_eur)} · KC (USD/lb): {fmt(prices.kc_usd_per_lb)} · RC (USD/t): {fmt(prices.rc_usd_per_ton)}
         </div>
       </div>
 
