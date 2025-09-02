@@ -57,6 +57,12 @@ export default function Productions() {
     const runRows = (r.data ?? []) as Run[]
     setRuns(runRows)
 
+    const runIns = await supabase.from('production_runs').insert([{
+      org_id: orgId,
+      producer_org_id: orgId,        // <— redundant zum Default, aber explizit
+      happened_at: happenedAt || null
+    }]).select('id').single()
+
     const ids = runRows.map(x => x.id)
     if (ids.length === 0) { setFinByRun({}); setInpByRun({}); setLoading(false); return }
 
