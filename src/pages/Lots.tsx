@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 
-// ---- Types (lokal)
+// ---- Types
 type Species = 'arabica' | 'robusta' | 'other'
 type PriceScheme = 'fixed_eur' | 'fixed_usd' | 'differential'
 type LotStatus = 'contracted' | 'price_fixed' | 'at_port' | 'at_production_wh' | 'produced' | 'closed' | null
@@ -52,8 +52,8 @@ const FORM_DEFAULTS: LotForm = {
   price_scheme: 'fixed_eur',
   price_fixed_eur_per_kg: '',
   price_fixed_usd_per_lb: '',
-  diff_root: 'KC',          // ICE Arabica
-  diff_month_code: '',      // (H,K,N,U,Z) → Mär/Mai/Jul/Sep/Dez
+  diff_root: 'KC',
+  diff_month_code: '',
   diff_year: '',
   diff_value: '',
   initial_quantity_kg: '',
@@ -66,13 +66,11 @@ const COUNTRIES = [
   'Peru','Nicaragua','Costa Rica','Kenya','Tanzania','Rwanda','Burundi','El Salvador','Panama','Ecuador',
   'Papua New Guinea','DR Congo','Cameroon','Yemen','Bolivia','Dominican Republic','Laos','Thailand','China (Yunnan)'
 ]
-
 const SPECIES_OPTIONS: { value: Species; label: string }[] = [
   { value: 'arabica', label: 'Arabica' },
   { value: 'robusta', label: 'Robusta' },
   { value: 'other',   label: 'Andere' },
 ]
-
 const STATUS_OPTIONS: { value: NonNullable<LotStatus>; label: string }[] = [
   { value: 'contracted',       label: 'Kontrahiert' },
   { value: 'price_fixed',      label: 'Preis fixiert' },
@@ -81,19 +79,15 @@ const STATUS_OPTIONS: { value: NonNullable<LotStatus>; label: string }[] = [
   { value: 'produced',         label: 'Produziert' },
   { value: 'closed',           label: 'Abgeschlossen' },
 ]
-
 const PRICE_SCHEMES: { value: PriceScheme; label: string }[] = [
   { value: 'fixed_eur', label: 'Fixiert in EUR/kg' },
   { value: 'fixed_usd', label: 'Fixiert in USD/lb' },
   { value: 'differential', label: 'Differential (KC/RC ± diff)' },
 ]
-
 const DIFF_ROOTS = [
   { value: 'KC', label: 'KC (Arabica ICE)' },
   { value: 'RC', label: 'RC (Robusta ICE)' },
 ]
-
-// Für KC sind üblich: H (Mär), K (Mai), N (Jul), U (Sep), Z (Dez)
 const FUT_MONTHS = [
   { value: 'H', label: 'Mär (H)' },
   { value: 'K', label: 'Mai (K)' },
@@ -133,28 +127,35 @@ export default function Lots() {
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase()
     if (!term) return rows
-    return rows.filter(r => {
-      return (
-        (r.short_desc ?? '').toLowerCase().includes(term) ||
-        (r.origin_country ?? '').toLowerCase().includes(term) ||
-        (r.external_contract_no ?? '').toLowerCase().includes(term) ||
-        (r.dds_reference ?? '').toLowerCase().includes(term)
-      )
-    })
+    return rows.filter(r => (
+      (r.short_desc ?? '').toLowerCase().includes(term) ||
+      (r.origin_country ?? '').toLowerCase().includes(term) ||
+      (r.external_contract_no ?? '').toLowerCase().includes(term) ||
+      (r.dds_reference ?? '').toLowerCase().includes(term)
+    ))
   }, [rows, q])
+
+  // Delete Lot (RPC)
+  async function deleteLot(id: string) {
+    if (!confirm('Wirklich löschen? Lot darf in keiner Produktion verwendet sein.')) return
+    const res = await supabase.rpc('safe_delete_green_lot', { p_id: id })
+    if (res.error) {
+      alert(res.error.message)
+    } else {
+      setRows(prev => prev.filter(x => x.id !== id))
+    }
+  }
 
   // Insert
   async function onCreate(e: FormEvent) {
     e.preventDefault()
     setErr(null); setBusy(true)
     try {
-      // org_id für RLS
       const prof = await supabase.from('profiles').select('org_id').maybeSingle()
       if (prof.error) throw prof.error
       const orgId = prof.data?.org_id
       if (!orgId) throw new Error('Kein org_id im Profil gefunden.')
 
-      // Payload bauen
       const price_fixed_eur_per_kg = f.price_scheme === 'fixed_eur' ? numOrNull(f.price_fixed_eur_per_kg) : null
       const price_fixed_usd_per_lb = f.price_scheme === 'fixed_usd' ? numOrNull(f.price_fixed_usd_per_lb) : null
       const diff_root       = f.price_scheme === 'differential' ? (f.diff_root || null) : null
@@ -181,7 +182,7 @@ export default function Lots() {
       if (lotRes.error) throw lotRes.error
       const newLotId = lotRes.data!.id as string
 
-      // optionaler Startbestand
+      // optional: Startbestand
       const qty = numOrNull(f.initial_quantity_kg)
       if (qty && f.initial_warehouse_id) {
         const mv = await supabase.from('inventory_moves').insert([{
@@ -194,7 +195,6 @@ export default function Lots() {
         if (mv.error) throw mv.error
       }
 
-      // Reset & Reload
       setF(FORM_DEFAULTS)
       await load()
     } catch (e: any) {
@@ -203,6 +203,8 @@ export default function Lots() {
       setBusy(false)
     }
   }
+
+  if (loading) return <div>Lade…</div>
 
   return (
     <div className="space-y-6">
@@ -233,21 +235,6 @@ export default function Lots() {
               <th className="text-left p-2">Aktion</th>
             </tr>
           </thead>
-          <td className="p-2">
-            <div className="flex items-center gap-3">
-             <a href={`/lots/${r.id}`} className="text-sky-700 underline">Details</a>
-             <button
-              className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
-              onClick={async ()=>{
-               if (!confirm('Wirklich löschen? Lot darf in keiner Produktion verwendet sein.')) return
-               const res = await supabase.rpc('safe_delete_green_lot', { p_id: r.id })
-               if (res.error) alert(res.error.message)
-               else setRows(prev => prev.filter(x => x.id !== r.id))
-              }}>
-              Löschen
-            </button>
-          </div>
-          </td>
           <tbody>
             {filtered.map(r => (
               <tr key={r.id} className="border-t">
@@ -259,7 +246,15 @@ export default function Lots() {
                 <td className="p-2">{r.dds_reference ?? '—'}</td>
                 <td className="p-2">{r.external_contract_no ?? '—'}</td>
                 <td className="p-2">
-                  <Link to={`/lots/${r.id}`} className="text-sky-700 underline">Details</Link>
+                  <div className="flex items-center gap-3">
+                    <Link to={`/lots/${r.id}`} className="text-sky-700 underline">Details</Link>
+                    <button
+                      className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
+                      onClick={()=>deleteLot(r.id)}
+                    >
+                      Löschen
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
