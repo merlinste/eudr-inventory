@@ -119,7 +119,7 @@ export default function Productions() {
   }, [runs, q, finByRun])
 
   async function deleteRun(id: string) {
-    if (!confirm('Produktion wirklich löschen?')) return
+    if (!confirm('Produktion wirklich loeschen?')) return
     const res = await supabase.rpc('safe_delete_production_run', { p_id: id })
     if (res.error) alert(res.error.message)
     else setRuns(prev => prev.filter(x => x.id !== id))
@@ -129,10 +129,9 @@ export default function Productions() {
     setCreateErr(null); setBusy(true)
     try {
       const valid = inputs.filter(i => i.lot_id && parseFloat(i.kg) > 0)
-      if (!valid.length) throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
-      if (!whSource) throw new Error('Quell‑Lager (grün) wählen.')
+      if (!valid.length) throw new Error('Mindestens ein Input-Lot mit Menge erforderlich.')
+      if (!whSource) throw new Error('Quell-Lager (gruen) waehlen.')
 
-      // Vorab: je Lot genügender Bestand im Quell-Lager?
       for (const row of valid) {
         const need = Math.abs(parseFloat(row.kg))
         const bal = await supabase.rpc('rpc_green_lot_balances', { p_lot_id: row.lot_id })
@@ -141,7 +140,7 @@ export default function Productions() {
         const have = Number(inSrc?.balance_kg ?? 0)
         if (have < need) {
           const lotName = lots.find(l => l.id === row.lot_id)?.short_desc ?? row.lot_id
-          throw new Error(`Im Quell‑Lager liegt für Lot „${lotName}” nur ${fmtKg(have)} kg (benötigt: ${fmtKg(need)} kg).`)
+          throw new Error(`Im Quell-Lager liegt fuer Lot "${lotName}" nur ${fmtKg(have)} kg (benoetigt: ${fmtKg(need)} kg).`)
         }
       }
 
@@ -150,7 +149,6 @@ export default function Productions() {
       const orgId = prof.data?.org_id
       if (!orgId) throw new Error('Kein org_id im Profil.')
 
-      // 1) Produktions-Run
       const runIns = await supabase.from('production_runs').insert([{
         org_id: orgId,
         producer_org_id: orgId,
@@ -159,7 +157,6 @@ export default function Productions() {
       if (runIns.error) throw runIns.error
       const runId = runIns.data!.id as string
 
-      // 2) Finished Batch (optional)
       if (productId || batchCode || mhdText) {
         const fbIns = await supabase.from('finished_batches').insert([{
           production_run_id: runId,
@@ -170,7 +167,6 @@ export default function Productions() {
         if (fbIns.error) throw fbIns.error
       }
 
-      // 3) Dokumentation run_inputs
       if (valid.length) {
         const riIns = await supabase.from('run_inputs').insert(
           valid.map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
@@ -178,7 +174,6 @@ export default function Productions() {
         if (riIns.error) throw riIns.error
       }
 
-      // 4) GREEN‑Moves (negativ)
       const greenMoves = valid.map(i => ({
         org_id: orgId,
         item: 'green',
@@ -187,13 +182,12 @@ export default function Productions() {
         warehouse_id: whSource,
         production_run_id: runId,
         note: 'production consumption',
-        direction: 'out'
+        direction: 'out',
         reason: 'production_consume'
       }))
       const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
       if (mvIns.error) throw mvIns.error
 
-      // Reset + Refresh
       setRunDate(today); setWhSource(whStock[0]?.warehouse_id || '')
       setProductId(''); setVariantId(''); setBatchCode(''); setMhdText(''); setOutKg('')
       setInputs([{ lot_id: '', kg: '' }])
@@ -210,7 +204,7 @@ export default function Productions() {
     [variants, productId]
   )
 
-  if (loading) return <div>Lade…</div>
+  if (loading) return <div>Laedt...</div>
 
   return (
     <div className="space-y-6">
@@ -237,12 +231,12 @@ export default function Productions() {
             {filteredRuns.map(r => (
               <tr key={r.id} className="border-t">
                 <td className="p-2">{(r.run_date ?? r.happened_at ?? r.created_at ?? '').slice(0,10)}</td>
-                <td className="p-2">{finByRun[r.id] ?? '—'}</td>
+                <td className="p-2">{finByRun[r.id] ?? '-'}</td>
                 <td className="p-2">{inpByRun[r.id] ?? 0}</td>
                 <td className="p-2">
                   <button className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
                           onClick={()=>deleteRun(r.id)}>
-                    Löschen
+                    Loeschen
                   </button>
                 </td>
               </tr>
@@ -253,7 +247,6 @@ export default function Productions() {
       </div>
       {listErr && <div className="text-red-600 text-sm">{listErr}</div>}
 
-      {/* Neues Run-Formular */}
       <div className="border rounded p-4 space-y-4">
         <h3 className="font-medium">Neuen Produktionslauf anlegen</h3>
 
@@ -263,13 +256,13 @@ export default function Productions() {
                    value={runDate} onChange={e=>setRunDate(e.target.value)} />
           </label>
 
-          <label>Quell‑Lager (grün)
+          <label>Quell-Lager (gruen)
             <select className="border rounded px-3 py-2 w-full"
                     value={whSource} onChange={e=>setWhSource(e.target.value)}>
-              {whStock.length === 0 && <option value="">— kein Lager mit Bestand —</option>}
+              {whStock.length === 0 && <option value="">- kein Lager mit Bestand -</option>}
               {whStock.map(w => (
                 <option key={w.warehouse_id} value={w.warehouse_id}>
-                  {w.name} — {fmtKg(w.balance_kg)} kg
+                  {w.name} - {fmtKg(w.balance_kg)} kg
                 </option>
               ))}
             </select>
@@ -280,7 +273,7 @@ export default function Productions() {
           <label className="col-span-1">Produkt (optional)
             <select className="border rounded px-3 py-2 w-full"
                     value={productId} onChange={e=>{ setProductId(e.target.value); setVariantId('') }}>
-              <option value="">—</option>
+              <option value="">-</option>
               {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </label>
@@ -288,11 +281,11 @@ export default function Productions() {
           <label className="col-span-1">Variante
             <select className="border rounded px-3 py-2 w-full"
                     value={variantId} onChange={e=>setVariantId(e.target.value)} disabled={!productId}>
-              <option value="">—</option>
+              <option value="">-</option>
               {productVariants.map(v => (
                 <option key={v.id} value={v.id}>
                   {v.packaging_type === 'bag' && v.net_weight_g ? `Beutel ${v.net_weight_g}g`
-                   : v.packaging_type === 'capsule_pack' ? `Kapseln ${v.capsules_per_pack}×${v.grams_per_capsule}g`
+                   : v.packaging_type === 'capsule_pack' ? `Kapseln ${v.capsules_per_pack}x${v.grams_per_capsule}g`
                    : 'Variante'}
                 </option>
               ))}
@@ -312,16 +305,15 @@ export default function Productions() {
           </label>
         </div>
 
-        {/* Inputs */}
         <div className="space-y-2">
-          <div className="font-medium text-sm">Verwendete Rohkaffee‑Lots</div>
+          <div className="font-medium text-sm">Verwendete Rohkaffee-Lots</div>
           {inputs.map((row, idx) => (
             <div key={idx} className="grid grid-cols-4 gap-3 text-sm">
               <label className="col-span-3">Lot
                 <select className="border rounded px-3 py-2 w-full"
                         value={row.lot_id}
                         onChange={e=>updateInput(idx, { lot_id: e.target.value })}>
-                  <option value="">— wählen —</option>
+                  <option value="">- waehlen -</option>
                   {lots.map(l => <option key={l.id} value={l.id}>{l.short_desc ?? l.id}</option>)}
                 </select>
               </label>
@@ -335,7 +327,7 @@ export default function Productions() {
           <div className="flex gap-2">
             <button className="rounded bg-slate-200 px-3 py-1 text-sm" onClick={()=>addRow()}>+ Lot</button>
             {inputs.length > 1 && (
-              <button className="rounded bg-slate-200 px-3 py-1 text-sm" onClick={()=>removeLast()}>– letzte Zeile</button>
+              <button className="rounded bg-slate-200 px-3 py-1 text-sm" onClick={()=>removeLast()}>- letzte Zeile</button>
             )}
           </div>
         </div>
@@ -343,7 +335,7 @@ export default function Productions() {
         <div className="flex items-center justify-between">
           {createErr && <div className="text-red-600 text-sm">{createErr}</div>}
           <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={createRun} disabled={busy}>
-            {busy ? 'Speichere…' : 'Produktion anlegen'}
+            {busy ? 'Speichere...' : 'Produktion anlegen'}
           </button>
         </div>
       </div>
