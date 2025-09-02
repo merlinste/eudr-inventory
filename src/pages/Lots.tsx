@@ -168,6 +168,7 @@ export default function Lots() {
           warehouse_id: form.initial_warehouse_id,
           note: 'initial stock',
           direction: 'in'    // wird auch per Trigger abgesichert
+          reason: 'initial'
         }])
         if (mv.error) throw mv.error
       }
