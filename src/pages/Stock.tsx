@@ -14,7 +14,7 @@ type Lot = {
   diff_root: string | null
   diff_month_code: string | null
   diff_year: number | null
-  diff_value: number | null           // in USD/lb für KC (MVP); RC -> N/A
+  diff_value: number | null           // KC: USD/lb, RC: USD/ton
 }
 
 type SumRow = {
@@ -27,13 +27,17 @@ type SumRow = {
 type Prices = {
   usd_eur: number | null
   kc_usd_per_lb: number | null
-  rc_usd_per_ton: number | null     // ⇐ NEU
+  rc_usd_per_ton: number | null   // <-- wichtig: jetzt im Typ vorhanden
 }
 
 export default function Stock() {
   const [lots, setLots] = useState<Lot[]>([])
   const [sums, setSums] = useState<Record<string, SumRow>>({})
-  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null })
+  const [prices, setPrices] = useState<Prices>({
+    usd_eur: null,
+    kc_usd_per_lb: null,
+    rc_usd_per_ton: null,          // <-- Initialwert ergänzt
+  })
   const [q, setQ] = useState('')
   const [err, setErr] = useState<string|null>(null)
   const [loading, setLoading] = useState(true)
@@ -66,7 +70,12 @@ export default function Stock() {
     try {
       const res = await fetch('/.netlify/functions/prices')
       const j = await res.json()
-      setPrices(j)
+      // defensive merge, falls die Funktion ältere Felder einmal nicht liefert
+      setPrices(prev => ({
+        usd_eur: j.usd_eur ?? prev.usd_eur ?? null,
+        kc_usd_per_lb: j.kc_usd_per_lb ?? prev.kc_usd_per_lb ?? null,
+        rc_usd_per_ton: j.rc_usd_per_ton ?? prev.rc_usd_per_ton ?? null,
+      }))
     } catch (e) {
       console.error(e)
     }
@@ -82,39 +91,32 @@ export default function Stock() {
     )
   }, [lots, q])
 
-function priceEurPerKg(l: Lot): { value: number | null, note?: string } {
-  if (l.price_scheme === 'fixed_eur') {
-    return { value: l.price_fixed_eur_per_kg ?? null }
-  }
-
-  if (l.price_scheme === 'fixed_usd') {
-    // Fixpreis in USD/lb (wie Feldname sagt); für Robusta ggf. getrenntes Feld einführen, wenn ihr USD/t braucht
-    if (l.price_fixed_usd_per_lb == null || prices.usd_eur == null) return { value: null }
-    const usdPerKg = l.price_fixed_usd_per_lb / 0.45359237
-    return { value: usdPerKg * prices.usd_eur }
-  }
-
-  if (l.price_scheme === 'differential') {
-    if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
-
-    if (l.diff_root === 'KC') {
-      if (prices.kc_usd_per_lb == null) return { value: null }
-      const usdLb = prices.kc_usd_per_lb + l.diff_value     // Diff in USD/lb
-      const eurKg = (usdLb / 0.45359237) * prices.usd_eur
-      return { value: eurKg, note: 'KC (Front) + Diff' }
+  function priceEurPerKg(l: Lot): { value: number | null, note?: string } {
+    if (l.price_scheme === 'fixed_eur') {
+      return { value: l.price_fixed_eur_per_kg ?? null }
     }
-
-    if (l.diff_root === 'RC') {
-      if (prices.rc_usd_per_ton == null) return { value: null }
-      const usdPerTon = prices.rc_usd_per_ton + l.diff_value // Diff in USD/ton
-      const eurKg = (usdPerTon / 1000) * prices.usd_eur
-      return { value: eurKg, note: 'RC (Front) + Diff' }
+    if (l.price_scheme === 'fixed_usd') {
+      if (l.price_fixed_usd_per_lb == null || prices.usd_eur == null) return { value: null }
+      const usdPerKg = l.price_fixed_usd_per_lb / 0.45359237
+      return { value: usdPerKg * prices.usd_eur }
     }
+    if (l.price_scheme === 'differential') {
+      if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
+      if (l.diff_root === 'KC') {
+        if (prices.kc_usd_per_lb == null) return { value: null }
+        const usdLb = prices.kc_usd_per_lb + l.diff_value   // Diff in USD/lb
+        const eurKg = (usdLb / 0.45359237) * prices.usd_eur
+        return { value: eurKg, note: 'KC (Front) + Diff' }
+      }
+      if (l.diff_root === 'RC') {
+        if (prices.rc_usd_per_ton == null) return { value: null }
+        const usdPerTon = prices.rc_usd_per_ton + l.diff_value // Diff in USD/ton
+        const eurKg = (usdPerTon / 1000) * prices.usd_eur
+        return { value: eurKg, note: 'RC (Front) + Diff' }
+      }
+    }
+    return { value: null }
   }
-
-  return { value: null }
-}
-
 
   if (loading) return <div>Lade…</div>
 
