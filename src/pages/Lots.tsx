@@ -189,8 +189,10 @@ export default function Lots() {
           org_id: orgId,
           item: 'green',
           green_lot_id: newLotId,
-          delta_kg: qty,
-          warehouse_id: f.initial_warehouse_id
+          delta_kg: parseFloat(form.initial_kg),
+          warehouse_id: form.initial_warehouse_id,
+          note: 'initial stock',
+          direction: 'in'
         }])
         if (mv.error) throw mv.error
       }
