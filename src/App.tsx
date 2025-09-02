@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabaseClient'
 import Shell from '@/components/Shell'
 
 import Login from '@/pages/Login'
+import Stock from '@/pages/Stock'
 import Lots from '@/pages/Lots'
 import LotDetail from '@/pages/LotDetail'
 import Productions from '@/pages/Productions'
@@ -20,7 +21,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route element={<RequireAuth><Shell /></RequireAuth>}>
           <Route index element={<Navigate to="/stock" replace />} />
-          <Route path="/stock" element={<StockPage />} />
+          <Route path="/stock" element={<Stock />} />
           <Route path="/lots" element={<Lots />} />
           <Route path="/lots/:id" element={<LotDetail />} />
           <Route path="/productions" element={<Productions />} />
