@@ -1,3 +1,4 @@
+// src/pages/Stock.tsx
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
@@ -14,7 +15,7 @@ type Lot = {
   diff_root: string | null
   diff_month_code: string | null
   diff_year: number | null
-  diff_value: number | null           // KC: USD/lb, RC: USD/ton
+  diff_value: number | null           // KC: c/lb, RC: USD/t
 }
 
 type SumRow = {
@@ -27,17 +28,13 @@ type SumRow = {
 type Prices = {
   usd_eur: number | null
   kc_usd_per_lb: number | null
-  rc_usd_per_ton: number | null   // <-- wichtig: jetzt im Typ vorhanden
+  rc_usd_per_ton: number | null
 }
 
 export default function Stock() {
   const [lots, setLots] = useState<Lot[]>([])
   const [sums, setSums] = useState<Record<string, SumRow>>({})
-  const [prices, setPrices] = useState<Prices>({
-    usd_eur: null,
-    kc_usd_per_lb: null,
-    rc_usd_per_ton: null,          // <-- Initialwert ergänzt
-  })
+  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null })
   const [q, setQ] = useState('')
   const [err, setErr] = useState<string|null>(null)
   const [loading, setLoading] = useState(true)
@@ -55,7 +52,6 @@ export default function Stock() {
       if (!alive) return
       if (l.error) setErr(l.error.message)
       if (s.error) setErr(s.error.message || null)
-
       setLots((l.data ?? []) as Lot[])
       const m: Record<string, SumRow> = {}
       for (const row of (s.data ?? []) as SumRow[]) m[row.green_lot_id] = row
@@ -66,21 +62,18 @@ export default function Stock() {
     return () => { alive = false }
   }, [])
 
+  useEffect(() => { refreshPrices() }, [])
   async function refreshPrices() {
     try {
       const res = await fetch('/.netlify/functions/prices')
       const j = await res.json()
-      // defensive merge, falls die Funktion ältere Felder einmal nicht liefert
       setPrices(prev => ({
         usd_eur: j.usd_eur ?? prev.usd_eur ?? null,
         kc_usd_per_lb: j.kc_usd_per_lb ?? prev.kc_usd_per_lb ?? null,
         rc_usd_per_ton: j.rc_usd_per_ton ?? prev.rc_usd_per_ton ?? null,
       }))
-    } catch (e) {
-      console.error(e)
-    }
+    } catch (e) { console.error(e) }
   }
-  useEffect(()=>{ refreshPrices() }, [])
 
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase()
@@ -95,30 +88,37 @@ export default function Stock() {
     if (l.price_scheme === 'fixed_eur') {
       return { value: l.price_fixed_eur_per_kg ?? null }
     }
+
     if (l.price_scheme === 'fixed_usd') {
       if (l.price_fixed_usd_per_lb == null || prices.usd_eur == null) return { value: null }
       const usdPerKg = l.price_fixed_usd_per_lb / 0.45359237
       return { value: usdPerKg * prices.usd_eur }
     }
+
     if (l.price_scheme === 'differential') {
-     if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
+      if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
 
-     if (l.diff_root === 'KC') {
-      if (prices.kc_usd_per_lb == null) return { value: null }
-      const diffUsdPerLb = (l.diff_value ?? 0) / 100;        // c/lb → USD/lb
-      const usdLb = prices.kc_usd_per_lb + diffUsdPerLb;     // KC (USD/lb) + Diff (USD/lb)
-      const eurKg = (usdLb / 0.45359237) * prices.usd_eur;   // lb → kg, USD → EUR
-      return { value: eurKg, note: 'KC (Front) + Diff' }
+      if (l.diff_root === 'KC') {
+        if (prices.kc_usd_per_lb == null) return { value: null }
+        const diffUsdPerLb = (l.diff_value ?? 0) / 100  // c/lb → USD/lb
+        const usdLb = prices.kc_usd_per_lb + diffUsdPerLb
+        const eurKg = (usdLb / 0.45359237) * prices.usd_eur
+        return { value: eurKg, note: 'KC (Front) + Diff' }
+      }
+
+      if (l.diff_root === 'RC') {
+        if (prices.rc_usd_per_ton == null) return { value: null }
+        const usdPerTon = prices.rc_usd_per_ton + (l.diff_value ?? 0) // USD/t
+        const eurKg = (usdPerTon / 1000) * prices.usd_eur
+        return { value: eurKg, note: 'RC (Front) + Diff' }
+      }
+
+      // unbekannter diff_root
+      return { value: null }
     }
 
-     if (l.diff_root === 'RC') {
-      if (prices.rc_usd_per_ton == null) return { value: null }
-      const usdPerTon = prices.rc_usd_per_ton + (l.diff_value ?? 0); // USD/t
-      const eurKg = (usdPerTon / 1000) * prices.usd_eur;             // t → kg, USD → EUR
-      return { value: eurKg, note: 'RC (Front) + Diff' }
-    }
-}
-
+    // unbekanntes Schema
+    return { value: null }
   }
 
   if (loading) return <div>Lade…</div>
@@ -127,9 +127,7 @@ export default function Stock() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Bestand · Rohkaffee‑Lots</h2>
-        <div className="flex items-center gap-2">
-          <button onClick={refreshPrices} className="rounded bg-slate-200 px-3 py-1.5 text-sm">Preise aktualisieren</button>
-        </div>
+        <button onClick={refreshPrices} className="rounded bg-slate-200 px-3 py-1.5 text-sm">Preise aktualisieren</button>
       </div>
 
       <div className="flex items-center justify-between gap-3">
@@ -184,9 +182,7 @@ export default function Stock() {
       </div>
 
       {err && <div className="text-red-600 text-sm">{err}</div>}
-      <p className="text-xs text-slate-500">
-        Hinweis: „Produziert (kg)“ basiert auf negativen Bestandsbewegungen von GREEN‑Lots.
-      </p>
+      <p className="text-xs text-slate-500">„Produziert (kg)“ basiert auf negativen Bestandsbewegungen von GREEN‑Lots.</p>
     </div>
   )
 }
