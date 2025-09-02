@@ -188,6 +188,7 @@ export default function Productions() {
         warehouse_id: whSource,
         production_run_id: runId,
         note: 'production consumption'
+        direction: 'out' 
       }))
       const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
       if (mvIns.error) throw mvIns.error
