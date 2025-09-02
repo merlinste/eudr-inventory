@@ -369,7 +369,7 @@ export default function Lots() {
                          value={f.diff_year}
                          onChange={e=>setF(prev=>({...prev, diff_year: e.target.value}))}/>
                 </label>
-                <label>Diff (±)
+                <label>{f.diff_root === 'KC' ? 'Diff (c/lb)' : 'Diff (USD/t)'}
                   <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
                          placeholder="+0.20"
                          value={f.diff_value}
