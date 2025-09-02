@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import type { Feature, FeatureCollection, Geometry, GeoJsonObject } from 'geojson';
+import type { Feature, FeatureCollection, Geometry, GeoJsonObject } from 'geojson'
 
 type Lot = {
   id: string
@@ -16,7 +16,6 @@ type Lot = {
   species: 'arabica'|'robusta'|'other'
   status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null
 }
-
 type Wh = { id: string; name: string }
 type WhBalance = { warehouse_id: string; warehouse_name: string; balance_kg: number }
 
@@ -35,13 +34,13 @@ export default function LotDetail() {
   const [warehouses, setWarehouses] = useState<Wh[]>([])
   const [balances, setBalances] = useState<WhBalance[]>([])
 
-  // Split
+  // Aufteilen
   const [srcWh, setSrcWh] = useState('')
   const [dstWh, setDstWh] = useState('')
   const [moveKg, setMoveKg] = useState('')
   const [newShort, setNewShort] = useState('')
 
-  // Transfer (ohne neues Lot)
+  // Umlagern
   const [tSrc, setTSrc] = useState('')
   const [tDst, setTDst] = useState('')
   const [tKg, setTKg] = useState('')
@@ -51,26 +50,15 @@ export default function LotDetail() {
   const mapRef = useRef<L.Map|null>(null)
   const geoLayerRef = useRef<L.GeoJSON|null>(null)
 
-  const errMsg = useRef<string| null>(null)
-  const setErr = (m: string | null) => { errMsg.current = m } // interne Ablage
-
-  useEffect(() => {
-    if (id) {
-      loadAll(id)
-    }
-  }, [id])
+  useEffect(() => { if (id) void loadAll(id) }, [id])
 
   async function loadAll(lotId: string) {
-    setErr(null)
     const [lr, wh, bal] = await Promise.all([
-      supabase.from('green_lots')
-        .select('id, short_desc, status, dds_reference, external_contract_no')
-        .eq('id', lotId).single(),
+      supabase.from('green_lots').select('id, short_desc, status, dds_reference, external_contract_no').eq('id', lotId).single(),
       supabase.from('v_my_warehouses').select('id,name').order('name'),
       supabase.rpc('rpc_green_lot_balances', { p_lot_id: lotId })
     ])
 
-    if (lr.error) setErr(lr.error.message)
     if (!lr.error && lr.data) {
       setLot(lr.data as any)
       setShortDesc(lr.data.short_desc ?? '')
@@ -81,7 +69,6 @@ export default function LotDetail() {
     }
     if (!wh.error) setWarehouses((wh.data ?? []) as Wh[])
 
-    // Balances (RPC liefert: warehouse_id, name, balance_kg)
     if (!bal.error && Array.isArray(bal.data)) {
       const rows = (bal.data as any[]).map(r => ({
         warehouse_id: r.warehouse_id,
@@ -89,9 +76,14 @@ export default function LotDetail() {
         balance_kg: Number(r.balance_kg ?? 0)
       }))
       setBalances(rows)
+      // Defaults: Quelle auf erstes Lager mit Bestand setzen
+      const firstWithStock = rows.find(r => r.balance_kg > 0)
+      if (firstWithStock) {
+        setSrcWh(prev => prev || firstWithStock.warehouse_id)
+        setTSrc(prev => prev || firstWithStock.warehouse_id)
+      }
     }
 
-    // Karte initialisieren & GeoJSON laden
     initMapOnce()
     await loadGeoJSON(lotId)
   }
@@ -116,40 +108,27 @@ export default function LotDetail() {
 
   async function loadGeoJSON(lotId: string) {
     try {
-      // bevorzugt: View mit GeoJSON-Features
       const res = await supabase.from('v_lot_plots_geojson').select('*').eq('green_lot_id', lotId)
-      const features: any[] = []
+      const features: Feature<Geometry, any>[] = []
       if (!res.error && Array.isArray(res.data)) {
         for (const row of res.data as any[]) {
-          // tolerante Schlüssel-Erkennung
           const cand = row.geojson ?? row.feature ?? row.geom_geojson ?? row.geom ?? null
           if (!cand) continue
           const f = typeof cand === 'string' ? JSON.parse(cand) : cand
-          if (f?.type === 'Feature' || f?.type === 'FeatureCollection' || f?.type === 'Polygon' || f?.type === 'MultiPolygon') {
-            if (f.type === 'FeatureCollection') features.push(...(f.features ?? []))
-            else if (f.type === 'Feature') features.push(f)
-            else features.push({ type:'Feature', geometry:f, properties:{} })
-          }
+          if (f?.type === 'Feature') features.push(f as Feature<Geometry, any>)
+          else if (f?.type === 'FeatureCollection') features.push(...((f.features ?? []) as Feature<Geometry, any>[]))
+          else if (f?.type === 'Polygon' || f?.type === 'MultiPolygon') features.push({ type:'Feature', properties:{}, geometry:f })
         }
       }
       if (geoLayerRef.current) {
-       geoLayerRef.current.clearLayers()
-       if (features.length) {
-        const fc: FeatureCollection<Geometry, any> = {
-         type: 'FeatureCollection',
-         features: features as Feature<Geometry, any>[]
+        geoLayerRef.current.clearLayers()
+        if (features.length) {
+          const fc: FeatureCollection<Geometry, any> = { type:'FeatureCollection', features }
+          geoLayerRef.current.addData(fc as unknown as GeoJsonObject)
+          try { mapRef.current?.fitBounds(geoLayerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] }) } catch {}
         }
-  // Leaflet erwartet GeoJsonObject; FeatureCollection ist ein Subtyp – cast hilft TS über die Excess-Property-Hürde
-        geoLayerRef.current.addData(fc as unknown as GeoJsonObject)
-        try {
-         mapRef.current?.fitBounds(geoLayerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] })
-        } catch {}
-}
-
       }
-    } catch (e) {
-      console.error(e)
-    }
+    } catch (e) { console.error(e) }
   }
 
   async function saveEdit() {
@@ -160,9 +139,10 @@ export default function LotDetail() {
       dds_reference: ddsRef || null,
       external_contract_no: extNo || null
     }).eq('id', id)
-    if (upd.error) alert(upd.error.message)
-    else alert('Gespeichert.')
+    if (upd.error) alert(upd.error.message); else alert('Gespeichert.')
   }
+
+  const sourceOptions = useMemo(() => balances.filter(b => b.balance_kg > 0), [balances])
 
   async function doSplit() {
     if (!id) return
@@ -178,8 +158,9 @@ export default function LotDetail() {
 
   async function doTransfer(all = false) {
     if (!id) return
-    const kg = all ? null : (isFinite(parseFloat(tKg)) ? parseFloat(tKg) : null)
     if (!tSrc || !tDst) { alert('Bitte Quelle & Ziel wählen.'); return }
+    if (tSrc === tDst) { alert('Quelle und Ziel müssen unterschiedlich sein.'); return }
+    const kg = all ? null : (isFinite(parseFloat(tKg)) ? parseFloat(tKg) : null)
     const res = await supabase.rpc('safe_transfer_green', {
       p_lot_id: id, p_src_warehouse_id: tSrc, p_dst_warehouse_id: tDst, p_move_kg: kg
     })
@@ -189,8 +170,7 @@ export default function LotDetail() {
 
   async function onGeoJSONFile(e: React.ChangeEvent<HTMLInputElement>) {
     if (!id) return
-    const f = e.target.files?.[0]
-    if (!f) return
+    const f = e.target.files?.[0]; if (!f) return
     try {
       const txt = await f.text()
       const parsed = JSON.parse(txt)
@@ -200,14 +180,8 @@ export default function LotDetail() {
       alert(`${res.data ?? 0} Feature(s) importiert.`)
     } catch (err: any) {
       alert(err.message ?? String(err))
-    } finally {
-      e.target.value = ''
-    }
+    } finally { e.target.value = '' }
   }
-
-  const balanceText = useMemo(() => {
-    return balances.map(b => `${b.warehouse_name}: ${fmtKg(b.balance_kg)} kg`).join(' · ')
-  }, [balances])
 
   if (!lot) return <div>Lade…</div>
 
@@ -220,12 +194,10 @@ export default function LotDetail() {
         <h3 className="font-medium">Stammdaten bearbeiten</h3>
         <div className="grid grid-cols-2 gap-3 text-sm">
           <label>Kurzbeschreibung
-            <input className="border rounded px-3 py-2 w-full"
-                   value={shortDesc} onChange={e=>setShortDesc(e.target.value)} />
+            <input className="border rounded px-3 py-2 w-full" value={shortDesc} onChange={e=>setShortDesc(e.target.value)} />
           </label>
           <label>Status
-            <select className="border rounded px-3 py-2 w-full"
-                    value={status ?? 'contracted'} onChange={e=>setStatus(e.target.value as any)}>
+            <select className="border rounded px-3 py-2 w-full" value={status ?? 'contracted'} onChange={e=>setStatus(e.target.value as any)}>
               <option value="contracted">Kontrahiert</option>
               <option value="price_fixed">Preis fixiert</option>
               <option value="at_port">Im Hafen</option>
@@ -241,20 +213,29 @@ export default function LotDetail() {
             <input className="border rounded px-3 py-2 w-full" value={extNo} onChange={e=>setExtNo(e.target.value)} />
           </label>
         </div>
-        <div className="flex items-center gap-3 justify-between">
-          <div className="text-xs text-slate-500">Bestand je Lager: {balanceText || '—'}</div>
+        <div className="text-xs text-slate-500">
+          Bestand je Lager:&nbsp;
+          {balances.length
+            ? balances.map(b => `${b.warehouse_name}: ${fmtKg(b.balance_kg)} kg`).join(' · ')
+            : '—'}
+        </div>
+        <div className="flex justify-end">
           <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={saveEdit}>Speichern</button>
         </div>
       </div>
 
-      {/* Aufteilen (erzeugt neues Lot) */}
+      {/* Aufteilen (neues Lot) */}
       <div className="border rounded p-4 space-y-3">
         <h3 className="font-medium">Lot aufteilen (neues Lot erzeugen)</h3>
         <div className="grid grid-cols-4 gap-3 text-sm">
           <label>Quelle
             <select className="border rounded px-3 py-2 w-full" value={srcWh} onChange={e=>setSrcWh(e.target.value)}>
               <option value="">— wählen —</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              {sourceOptions.map(w => (
+                <option key={w.warehouse_id} value={w.warehouse_id}>
+                  {w.warehouse_name} — {fmtKg(w.balance_kg)} kg
+                </option>
+              ))}
             </select>
           </label>
           <label>Ziel
@@ -264,25 +245,27 @@ export default function LotDetail() {
             </select>
           </label>
           <label>Menge (kg)
-            <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
-                   value={moveKg} onChange={e=>setMoveKg(e.target.value)} />
+            <input type="number" step="0.01" className="border rounded px-3 py-2 w-full" value={moveKg} onChange={e=>setMoveKg(e.target.value)} />
           </label>
           <label>Neue Bezeichnung (optional)
-            <input className="border rounded px-3 py-2 w-full"
-                   value={newShort} onChange={e=>setNewShort(e.target.value)} />
+            <input className="border rounded px-3 py-2 w-full" value={newShort} onChange={e=>setNewShort(e.target.value)} />
           </label>
         </div>
         <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={doSplit}>Aufteilen</button>
       </div>
 
-      {/* Umlagern (kein neues Lot) */}
+      {/* Umlagern (ohne neues Lot) */}
       <div className="border rounded p-4 space-y-3">
         <h3 className="font-medium">Umlagern (ohne neues Lot)</h3>
         <div className="grid grid-cols-4 gap-3 text-sm">
           <label>Quelle
             <select className="border rounded px-3 py-2 w-full" value={tSrc} onChange={e=>setTSrc(e.target.value)}>
               <option value="">— wählen —</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              {sourceOptions.map(w => (
+                <option key={w.warehouse_id} value={w.warehouse_id}>
+                  {w.warehouse_name} — {fmtKg(w.balance_kg)} kg
+                </option>
+              ))}
             </select>
           </label>
           <label>Ziel
@@ -304,13 +287,12 @@ export default function LotDetail() {
         <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={()=>doTransfer(false)}>Umlagern</button>
       </div>
 
-      {/* Karte + GeoJSON-Upload */}
+      {/* Karte + GeoJSON Upload */}
       <div className="border rounded p-4 space-y-3">
         <h3 className="font-medium">Karte & Plots (GeoJSON)</h3>
         <div className="flex items-center gap-3">
-          <input type="file" accept=".json,.geojson,application/geo+json,application/json"
-                 onChange={onGeoJSONFile}/>
-          <span className="text-xs text-slate-500">Feature/FeatureCollection; Koordinaten in WGS84.</span>
+          <input type="file" accept=".json,.geojson,application/geo+json,application/json" onChange={onGeoJSONFile}/>
+          <span className="text-xs text-slate-500">Feature/FeatureCollection; WGS84.</span>
         </div>
         <div ref={mapElRef} className="h-[460px] w-full border rounded" />
       </div>
@@ -318,4 +300,6 @@ export default function LotDetail() {
   )
 }
 
-function fmtKg(n: number) { return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(n) }
+function fmtKg(n: number) {
+  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(n)
+}
