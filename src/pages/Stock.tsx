@@ -101,21 +101,24 @@ export default function Stock() {
       return { value: usdPerKg * prices.usd_eur }
     }
     if (l.price_scheme === 'differential') {
-      if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
-      if (l.diff_root === 'KC') {
-        if (prices.kc_usd_per_lb == null) return { value: null }
-        const usdLb = prices.kc_usd_per_lb + l.diff_value   // Diff in USD/lb
-        const eurKg = (usdLb / 0.45359237) * prices.usd_eur
-        return { value: eurKg, note: 'KC (Front) + Diff' }
-      }
-      if (l.diff_root === 'RC') {
-        if (prices.rc_usd_per_ton == null) return { value: null }
-        const usdPerTon = prices.rc_usd_per_ton + l.diff_value // Diff in USD/ton
-        const eurKg = (usdPerTon / 1000) * prices.usd_eur
-        return { value: eurKg, note: 'RC (Front) + Diff' }
-      }
+     if (!l.diff_root || l.diff_value == null || prices.usd_eur == null) return { value: null }
+
+     if (l.diff_root === 'KC') {
+      if (prices.kc_usd_per_lb == null) return { value: null }
+      const diffUsdPerLb = (l.diff_value ?? 0) / 100;        // c/lb → USD/lb
+      const usdLb = prices.kc_usd_per_lb + diffUsdPerLb;     // KC (USD/lb) + Diff (USD/lb)
+      const eurKg = (usdLb / 0.45359237) * prices.usd_eur;   // lb → kg, USD → EUR
+      return { value: eurKg, note: 'KC (Front) + Diff' }
     }
-    return { value: null }
+
+     if (l.diff_root === 'RC') {
+      if (prices.rc_usd_per_ton == null) return { value: null }
+      const usdPerTon = prices.rc_usd_per_ton + (l.diff_value ?? 0); // USD/t
+      const eurKg = (usdPerTon / 1000) * prices.usd_eur;             // t → kg, USD → EUR
+      return { value: eurKg, note: 'RC (Front) + Diff' }
+    }
+}
+
   }
 
   if (loading) return <div>Lade…</div>
