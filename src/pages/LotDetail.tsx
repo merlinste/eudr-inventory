@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import type { Feature, FeatureCollection, Geometry, GeoJsonObject } from 'geojson';
 
 type Lot = {
   id: string
@@ -132,13 +133,19 @@ export default function LotDetail() {
         }
       }
       if (geoLayerRef.current) {
-        geoLayerRef.current.clearLayers()
-        if (features.length) {
-          geoLayerRef.current.addData({ type:'FeatureCollection', features })
-          try {
-            mapRef.current?.fitBounds(geoLayerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] })
-          } catch { /* ignore if no bounds */ }
+       geoLayerRef.current.clearLayers()
+       if (features.length) {
+        const fc: FeatureCollection<Geometry, any> = {
+         type: 'FeatureCollection',
+         features: features as Feature<Geometry, any>[]
         }
+  // Leaflet erwartet GeoJsonObject; FeatureCollection ist ein Subtyp – cast hilft TS über die Excess-Property-Hürde
+        geoLayerRef.current.addData(fc as unknown as GeoJsonObject)
+        try {
+         mapRef.current?.fitBounds(geoLayerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] })
+        } catch {}
+}
+
       }
     } catch (e) {
       console.error(e)
