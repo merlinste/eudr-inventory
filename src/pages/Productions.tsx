@@ -14,6 +14,7 @@ type Variant = {
   grams_per_capsule: number | null;
 }
 type InputRow = { lot_id: string; kg: string }
+type WhStock = { warehouse_id: string; name: string; balance_kg: number }
 
 export default function Productions() {
   const [runs, setRuns] = useState<Run[]>([])
@@ -23,12 +24,13 @@ export default function Productions() {
   const [loading, setLoading] = useState(true)
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [whStock, setWhStock] = useState<WhStock[]>([])
   const [lots, setLots] = useState<Lot[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [variants, setVariants] = useState<Variant[]>([])
 
   const today = new Date().toISOString().slice(0, 10)
-  const [happenedAt, setHappenedAt] = useState<string>(today)
+  const [runDate, setRunDate] = useState<string>(today)
   const [whSource, setWhSource] = useState<string>('')
 
   const [productId, setProductId] = useState<string>('')
@@ -84,13 +86,25 @@ export default function Productions() {
   }
 
   async function loadFormData() {
-    const [wh, gl, p, v] = await Promise.all([
+    const [wh, ws, gl, p, v] = await Promise.all([
       supabase.from('v_my_warehouses').select('id,name,w_type').order('name'),
+      supabase.rpc('rpc_green_balance_per_warehouse'),
       supabase.from('green_lots').select('id,short_desc').order('created_at', { ascending: false }),
       supabase.from('products').select('id,name').order('name'),
       supabase.from('product_variants').select('id,product_id,packaging_type,net_weight_g,capsules_per_pack,grams_per_capsule')
     ])
     if (!wh.error) setWarehouses((wh.data ?? []) as Warehouse[])
+    if (!ws.error) {
+      const rows = ((ws.data ?? []) as any[]).map(r => ({
+        warehouse_id: r.warehouse_id,
+        name: r.name,
+        balance_kg: Number(r.balance_kg ?? 0)
+      })) as WhStock[]
+      setWhStock(rows)
+      // Standard: erstes Lager mit Bestand vorselektieren
+      const first = rows[0]
+      if (first) setWhSource(first.warehouse_id)
+    }
     if (!gl.error) setLots((gl.data ?? []) as Lot[])
     if (!p.error) setProducts((p.data ?? []) as Product[])
     if (!v.error) setVariants((v.data ?? []) as Variant[])
@@ -115,22 +129,33 @@ export default function Productions() {
   async function createRun() {
     setCreateErr(null); setBusy(true)
     try {
-      if (!inputs.some(i => i.lot_id && parseFloat(i.kg) > 0)) {
-        throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
-      }
+      const valid = inputs.filter(i => i.lot_id && parseFloat(i.kg) > 0)
+      if (!valid.length) throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
       if (!whSource) throw new Error('Quell‑Lager (grün) wählen.')
+
+      // Vorabprüfung: für jedes Lot muss im gewählten Lager genug Bestand liegen
+      for (const row of valid) {
+        const need = Math.abs(parseFloat(row.kg))
+        const bal = await supabase.rpc('rpc_green_lot_balances', { p_lot_id: row.lot_id })
+        if (bal.error) throw bal.error
+        const inSrc = ((bal.data ?? []) as any[]).find(x => x.warehouse_id === whSource)
+        const have = Number(inSrc?.balance_kg ?? 0)
+        if (have < need) {
+          const lotName = lots.find(l => l.id === row.lot_id)?.short_desc ?? row.lot_id
+          throw new Error(`Im Quell‑Lager liegt für Lot „${lotName}” nur ${fmtKg(have)} kg (benötigt: ${fmtKg(need)} kg).`)
+        }
+      }
 
       const prof = await supabase.from('profiles').select('org_id').maybeSingle()
       if (prof.error) throw prof.error
       const orgId = prof.data?.org_id
       if (!orgId) throw new Error('Kein org_id im Profil.')
 
-      // 1) Run (jetzt mit run_date)
+      // 1) Run – nur run_date setzen (NOT NULL)
       const runIns = await supabase.from('production_runs').insert([{
         org_id: orgId,
         producer_org_id: orgId,
-        run_date: happenedAt,              // <-- wichtig
-        happened_at: happenedAt || null    // optional, falls Feld existiert
+        run_date: runDate
       }]).select('id').single()
       if (runIns.error) throw runIns.error
       const runId = runIns.data!.id as string
@@ -146,35 +171,30 @@ export default function Productions() {
         if (fbIns.error) throw fbIns.error
       }
 
-      // 3) run_inputs (Dokumentation)
-      const inputRows = inputs
-        .filter(i => i.lot_id && parseFloat(i.kg) > 0)
-        .map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
-      if (inputRows.length) {
-        const riIns = await supabase.from('run_inputs').insert(inputRows)
+      // 3) Dokumentation run_inputs
+      if (valid.length) {
+        const riIns = await supabase.from('run_inputs').insert(
+          valid.map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
+        )
         if (riIns.error) throw riIns.error
       }
 
-      // 4) negative GREEN‑Moves
-      const greenMoves = inputs
-        .filter(i => i.lot_id && parseFloat(i.kg) > 0)
-        .map(i => ({
-          org_id: orgId,
-          item: 'green',
-          green_lot_id: i.lot_id,
-          delta_kg: -Math.abs(parseFloat(i.kg)),
-          warehouse_id: whSource,
-          production_run_id: runId
-        }))
-      if (greenMoves.length) {
-        const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
-        if (mvIns.error) alert('Run gespeichert, aber Bestandsbuchung (GREEN) blockiert: ' + mvIns.error.message)
-      }
+      // 4) GREEN‑Moves (negativ)
+      const greenMoves = valid.map(i => ({
+        org_id: orgId,
+        item: 'green',
+        green_lot_id: i.lot_id,
+        delta_kg: -Math.abs(parseFloat(i.kg)),
+        warehouse_id: whSource,
+        production_run_id: runId,
+        note: 'production consumption'
+      }))
+      const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
+      if (mvIns.error) throw mvIns.error
 
-      // Reset
-      setHappenedAt(today); setWhSource('')
-      setProductId(''); setVariantId('')
-      setBatchCode(''); setMhdText(''); setOutKg('')
+      // Reset + Refresh
+      setRunDate(today); setWhSource(whStock[0]?.warehouse_id || '')
+      setProductId(''); setVariantId(''); setBatchCode(''); setMhdText(''); setOutKg('')
       setInputs([{ lot_id: '', kg: '' }])
       await loadListing()
     } catch (e: any) {
@@ -239,13 +259,18 @@ export default function Productions() {
         <div className="grid grid-cols-3 gap-3 text-sm">
           <label>Datum
             <input type="date" className="border rounded px-3 py-2 w-full"
-                   value={happenedAt} onChange={e=>setHappenedAt(e.target.value)} />
+                   value={runDate} onChange={e=>setRunDate(e.target.value)} />
           </label>
+
           <label>Quell‑Lager (grün)
             <select className="border rounded px-3 py-2 w-full"
                     value={whSource} onChange={e=>setWhSource(e.target.value)}>
-              <option value="">— wählen —</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              {whStock.length === 0 && <option value="">— kein Lager mit Bestand —</option>}
+              {whStock.map(w => (
+                <option key={w.warehouse_id} value={w.warehouse_id}>
+                  {w.name} — {fmtKg(w.balance_kg)} kg
+                </option>
+              ))}
             </select>
           </label>
         </div>
@@ -258,6 +283,7 @@ export default function Productions() {
               {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </label>
+
           <label className="col-span-1">Variante
             <select className="border rounded px-3 py-2 w-full"
                     value={variantId} onChange={e=>setVariantId(e.target.value)} disabled={!productId}>
@@ -271,6 +297,7 @@ export default function Productions() {
               ))}
             </select>
           </label>
+
           <label className="col-span-1">Ausbringung (kg, optional)
             <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
                    value={outKg} onChange={e=>setOutKg(e.target.value)} />
@@ -327,4 +354,9 @@ export default function Productions() {
   }
   function addRow() { setInputs(prev => [...prev, { lot_id: '', kg: '' }]) }
   function removeLast() { setInputs(prev => prev.slice(0, -1)) }
+}
+
+function fmtKg(n: number | null | undefined) {
+  const v = Number(n ?? 0)
+  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(v)
 }
