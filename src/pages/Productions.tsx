@@ -1,273 +1,371 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+// src/pages/Productions.tsx
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
-type Option = { value: string; label: string }
+type Run = { id: string; created_at: string | null; happened_at: string | null }
+type Warehouse = { id: string; name: string; w_type: string }
+type Lot = { id: string; short_desc: string | null }
 type Product = { id: string; name: string }
 type Variant = {
-  id: string
-  product_id: string
-  packaging_type: 'weight_pack' | 'capsule_pack'
-  pack_size_g: number | null
-  capsules_per_pack: number | null
-  grams_per_capsule: number | null
+  id: string; product_id: string;
+  packaging_type: 'bag' | 'capsule_pack' | 'other' | null;
+  net_weight_g: number | null;
+  capsules_per_pack: number | null;
+  grams_per_capsule: number | null;
 }
-type Warehouse = { id: string; name: string; w_type: 'port'|'production'|'finished' }
-type GreenCompact = { id: string; short_desc: string | null }
+type FinishedAgg = { production_run_id: string; label: string }
+type InputAgg = { production_run_id: string; count: number }
+
+type InputRow = { lot_id: string; kg: string }
 
 export default function Productions() {
+  // Listing
+  const [runs, setRuns] = useState<Run[]>([])
+  const [finByRun, setFinByRun] = useState<Record<string, string>>({})
+  const [inpByRun, setInpByRun] = useState<Record<string, number>>({})
+  const [listErr, setListErr] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  // Create form
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [lots, setLots] = useState<Lot[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [variants, setVariants] = useState<Variant[]>([])
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
-  const [lots, setLots] = useState<GreenCompact[]>([])
-  const [err, setErr] = useState<string | null>(null)
+  const [createErr, setCreateErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const [form, setForm] = useState({
-    product_id: '',
-    variant_id: '',
-    producer_org_id: '', // optional: könnt ihr später selektieren
-    run_date: new Date().toISOString().slice(0,10),
-    mhd_text: '',
-    batch_code: '',
-    output_kg: '',
-    units: '',
-    src_wh: '', // Standard: Produktionslager
-    dst_wh: ''  // Standard: Fertiglager
-  })
+  // Form state
+  const today = new Date().toISOString().slice(0,10)
+  const [happenedAt, setHappenedAt] = useState<string>(today)
+  const [whSource, setWhSource] = useState<string>('')      // Quelle für grünen Verbrauch (wichtig für Inventur)
+  const [productId, setProductId] = useState<string>('')    // optional: fertiges Produkt/Charge dokumentieren
+  const [variantId, setVariantId] = useState<string>('')
+  const [batchCode, setBatchCode] = useState<string>('')
+  const [mhdText, setMhdText] = useState<string>('')
+  const [outKg, setOutKg] = useState<string>('')            // optionale Angabe; Bestandsbuchung (FINISHED) ist im MVP deaktiviert
+  const [inputs, setInputs] = useState<InputRow[]>([{ lot_id: '', kg: '' }])
 
-  // Inputs: dynamische Positionen (Lot + Menge)
-  const [inputs, setInputs] = useState<{ lot_id: string; qty_kg: string }[]>([{ lot_id: '', qty_kg: '' }])
+  // Filter/Anzeige
+  const [q, setQ] = useState('')
 
-  useEffect(() => {
-    let mounted = true
-    async function load() {
-      setErr(null)
-      const [pRes, vRes, wRes, lRes] = await Promise.all([
-        supabase.from('products').select('id, name').order('name'),
-        supabase.from('product_variants').select('id, product_id, packaging_type, pack_size_g, capsules_per_pack, grams_per_capsule').eq('active', true),
-        supabase.from('v_my_warehouses').select('id, name, w_type').order('name'),
-        supabase.from('green_lots').select('id, short_desc').order('created_at', { ascending: false })
-      ])
-      if (!mounted) return
-      if (pRes.error) setErr(pRes.error.message)
-      if (vRes.error) setErr(vRes.error.message || null)
-      if (wRes.error) setErr(wRes.error.message || null)
-      if (lRes.error) setErr(lRes.error.message || null)
-      setProducts(pRes.data ?? [])
-      setVariants(vRes.data ?? [])
-      setWarehouses(wRes.data ?? [])
-      setLots(lRes.data ?? [])
-      // Standard-Lager wählen
-      const prod = wRes.data?.find(w => w.w_type === 'production')?.id ?? ''
-      const fin  = wRes.data?.find(w => w.w_type === 'finished')?.id ?? ''
-      setForm(f => ({ ...f, src_wh: prod, dst_wh: fin }))
+  // ---------- Load listing ----------
+  async function loadListing() {
+    setLoading(true); setListErr(null)
+    // 1) Läufe
+    const r = await supabase.from('production_runs').select('id,created_at,happened_at').order('created_at', { ascending: false })
+    if (r.error) { setListErr(r.error.message); setLoading(false); return }
+    const runRows = (r.data ?? []) as Run[]
+    setRuns(runRows)
+
+    const ids = runRows.map(x => x.id)
+    if (ids.length === 0) { setFinByRun({}); setInpByRun({}); setLoading(false); return }
+
+    // 2) Aggregierte Inputs
+    const ri = await supabase.from('run_inputs').select('production_run_id, green_lot_id').in('production_run_id', ids)
+    const inpMap: Record<string, number> = {}
+    if (!ri.error) {
+      for (const row of (ri.data ?? []) as { production_run_id: string }[]) {
+        inpMap[row.production_run_id] = (inpMap[row.production_run_id] ?? 0) + 1
+      }
     }
-    load()
-    return () => { mounted = false }
-  }, [])
 
-  const productOptions: Option[] = useMemo(() => products.map(p => ({ value: p.id, label: p.name })), [products])
-  const variantOptions: Option[] = useMemo(
-    () => variants.filter(v => v.product_id === form.product_id).map(v => ({
-      value: v.id,
-      label: v.packaging_type === 'weight_pack' ? `${v.pack_size_g ?? '?'} g` : `${v.capsules_per_pack ?? '?'} Kapseln × ${v.grams_per_capsule ?? '?'} g`
-    })),
-    [variants, form.product_id]
-  )
-  const whOptions: Option[] = useMemo(() => warehouses.map(w => ({ value: w.id, label: w.name })), [warehouses])
-  const lotOptions: Option[] = useMemo(() => lots.map(l => ({ value: l.id, label: l.short_desc ?? l.id.slice(0,6) })), [lots])
+    // 3) Aggregierte fertige Batches (Produktnamen sammeln)
+    const fb = await supabase.from('finished_batches')
+      .select('production_run_id, batch_code, mhd_text, products(name)')
+      .in('production_run_id', ids)
+    const finMap: Record<string, string> = {}
+    if (!fb.error) {
+      const byRun: Record<string, { prod: string[], meta: string[] }> = {}
+      for (const row of (fb.data ?? []) as any[]) {
+        const rid = row.production_run_id
+        byRun[rid] ||= { prod: [], meta: [] }
+        const pname = row.products?.name as (string | null)
+        if (pname && !byRun[rid].prod.includes(pname)) byRun[rid].prod.push(pname)
+        const meta = [row.batch_code, row.mhd_text].filter(Boolean).join(' / ')
+        if (meta) byRun[rid].meta.push(meta)
+      }
+      for (const [rid, v] of Object.entries(byRun)) {
+        const left = v.prod.join(', ') || '—'
+        const right = v.meta.length ? ` (${v.meta.join('; ')})` : ''
+        finMap[rid] = left + right
+      }
+    }
 
-async function getMyOrgId(): Promise<string> {
-  const { data, error } = await supabase.from('profiles').select('org_id').maybeSingle()
-  if (error) throw error
-  if (!data?.org_id) throw new Error('Kein Profileintrag gefunden – bitte Admin verknüpft deinen User mit einer Organisation.')
-  return data.org_id
-}
-
-  function addInputRow() { setInputs(prev => [...prev, { lot_id: '', qty_kg: '' }]) }
-  function updateInputRow(i: number, patch: Partial<{lot_id: string; qty_kg: string}>) {
-    setInputs(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r))
-  }
-  function removeInputRow(i: number) {
-    setInputs(prev => prev.filter((_, idx) => idx !== i))
+    setInpByRun(inpMap)
+    setFinByRun(finMap)
+    setLoading(false)
   }
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault()
-    setErr(null); setBusy(true)
+  // ---------- Load form options ----------
+  async function loadFormData() {
+    setCreateErr(null)
+    const [wh, gl, p, v] = await Promise.all([
+      supabase.from('v_my_warehouses').select('id,name,w_type').order('name'),
+      supabase.from('green_lots').select('id,short_desc').order('created_at', { ascending: false }),
+      supabase.from('products').select('id,name').order('name'),
+      supabase.from('product_variants').select('id,product_id,packaging_type,net_weight_g,capsules_per_pack,grams_per_capsule')
+    ])
+    if (wh.error) setCreateErr(wh.error.message)
+    if (gl.error) setCreateErr(gl.error.message || null)
+    if (p.error) setCreateErr(p.error.message || null)
+    if (v.error) setCreateErr(v.error.message || null)
+    setWarehouses((wh.data ?? []) as Warehouse[])
+    setLots((gl.data ?? []) as Lot[])
+    setProducts((p.data ?? []) as Product[])
+    setVariants((v.data ?? []) as Variant[])
+  }
+
+  useEffect(() => { loadListing(); loadFormData() }, [])
+
+  const filteredRuns = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!t) return runs
+    return runs.filter(r =>
+      (r.happened_at ?? r.created_at ?? '').toLowerCase().includes(t) ||
+      (finByRun[r.id] ?? '').toLowerCase().includes(t)
+    )
+  }, [runs, q, finByRun])
+
+  // ---------- Delete a run ----------
+  async function deleteRun(id: string) {
+    if (!confirm('Produktion wirklich löschen?')) return
+    const res = await supabase.rpc('safe_delete_production_run', { p_id: id })
+    if (res.error) {
+      alert(res.error.message)
+    } else {
+      setRuns(prev => prev.filter(x => x.id !== id))
+    }
+  }
+
+  // ---------- Create a run ----------
+  async function createRun() {
+    setCreateErr(null); setBusy(true)
     try {
-      const orgId = await getMyOrgId()
-      // 1) Produktionslauf
-      const { data: run, error: runErr } = await supabase.from('production_runs').insert([{
+      // einfache Validierungen
+      if (!inputs.some(i => i.lot_id && parseFloat(i.kg) > 0)) {
+        throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
+      }
+      if (!whSource) throw new Error('Quell‑Lager (für grünen Verbrauch) wählen.')
+
+      // org_id besorgen
+      const prof = await supabase.from('profiles').select('org_id').maybeSingle()
+      if (prof.error) throw prof.error
+      const orgId = prof.data?.org_id
+      if (!orgId) throw new Error('Kein org_id im Profil.')
+
+      // 1) Run anlegen
+      const runIns = await supabase.from('production_runs').insert([{
         org_id: orgId,
-        producer_org_id: form.producer_org_id || orgId, // solange ihr selbst verbucht
-        product_id: form.product_id,
-        run_date: form.run_date
+        happened_at: happenedAt || null
       }]).select('id').single()
-      if (runErr) throw runErr
+      if (runIns.error) throw runIns.error
+      const runId = runIns.data!.id as string
 
-      // 2) Inputs
-      const validInputs = inputs.filter(r => r.lot_id && r.qty_kg && Number(r.qty_kg) > 0)
-      if (validInputs.length === 0) throw new Error('Bitte mindestens einen Rohkaffee-Input mit Menge angeben.')
-      const { error: inErr } = await supabase.from('run_inputs').insert(
-        validInputs.map(r => ({ production_run_id: run.id, green_lot_id: r.lot_id, qty_kg: Number(r.qty_kg) }))
-      )
-      if (inErr) throw inErr
-
-      // 3) Fertig-Charge anlegen (Output: entweder kg oder units setzen)
-      const payload: any = {
-        org_id: orgId,
-        product_id: form.product_id,
-        production_run_id: run.id,
-        variant_id: form.variant_id || null,
-        batch_code: form.batch_code || null,
-        mhd_text: form.mhd_text || null
-      }
-      if (form.output_kg) payload.output_kg = Number(form.output_kg)
-      if (!form.output_kg && form.units) payload.units = Number(form.units)
-
-      const { data: batch, error: fbErr } = await supabase.from('finished_batches')
-        .insert([payload])
-        .select('id, units')
-        .single()
-      if (fbErr) throw fbErr
-
-      // 4) Bewegungen: grün "out" (aus Produktionslager), fertig "in" (ins Fertiglager)
-      const greenMoves = validInputs.map(r => ({
-        org_id: orgId, item: 'green' as const, green_lot_id: r.lot_id,
-        warehouse_id: form.src_wh, direction: 'out' as const, reason: 'production_consume' as const,
-        qty_kg: Number(r.qty_kg), ref: `run:${run.id}`
-      }))
-      const { error: gmErr } = await supabase.from('inventory_moves').insert(greenMoves)
-      if (gmErr) throw gmErr
-
-      // Units für fertige Ware: aus der Batch lesen (Autofill-Trigger kann Units berechnen)
-      const units = batch?.units
-      if (!units || units <= 0) {
-        console.warn('Hinweis: Units der Charge sind 0/leer – bitte Output kg/Units prüfen.')
-      } else {
-        const { error: fmErr } = await supabase.from('inventory_moves').insert([{
-          org_id: orgId, item: 'finished' as const, finished_batch_id: batch!.id,
-          warehouse_id: form.dst_wh, direction: 'in' as const, reason: 'production_output' as const,
-          qty_units: units, ref: `run:${run.id}`
+      // 2) Finished Batch (optional)
+      if (productId || batchCode || mhdText) {
+        const fbIns = await supabase.from('finished_batches').insert([{
+          production_run_id: runId,
+          product_id: productId || null,
+          batch_code: batchCode || null,
+          mhd_text: mhdText || null
         }])
-        if (fmErr) throw fmErr
+        if (fbIns.error) throw fbIns.error
       }
 
-      // Erfolg -> Formular zurücksetzen
-      alert('Produktion gespeichert.')
-      setForm(f => ({ ...f, mhd_text: '', batch_code: '', output_kg: '', units: '' }))
-      setInputs([{ lot_id: '', qty_kg: '' }])
-    } catch (e:any) {
-      console.error(e)
-      setErr(e.message ?? String(e))
+      // 3) run_inputs (Dokumentation der Lots, kg separat über inventory_moves)
+      const inputRows = inputs.filter(i => i.lot_id && parseFloat(i.kg) > 0)
+                              .map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
+      if (inputRows.length) {
+        const riIns = await supabase.from('run_inputs').insert(inputRows)
+        if (riIns.error) throw riIns.error
+      }
+
+      // 4) Bestandsbewegungen (GREEN, negativ) – optional je nach RLS
+      const greenMoves = inputs
+        .filter(i => i.lot_id && parseFloat(i.kg) > 0)
+        .map(i => ({
+          org_id: orgId,
+          item: 'green',
+          green_lot_id: i.lot_id,
+          delta_kg: -Math.abs(parseFloat(i.kg)),
+          warehouse_id: whSource,
+          production_run_id: runId
+        }))
+      if (greenMoves.length) {
+        const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
+        if (mvIns.error) {
+          // Kein Abbruch des gesamten Vorgangs – Nutzer informieren:
+          console.warn('inventory_moves insert blocked by RLS?', mvIns.error)
+          alert('Hinweis: Run wurde angelegt, aber Bestandsbuchung (GREEN) war nicht erlaubt. Bitte INSERT‑Policy oder RPC aktivieren.')
+        }
+      }
+
+      // Reset & Reload
+      setHappenedAt(today)
+      setWhSource('')
+      setProductId(''); setVariantId(''); setBatchCode(''); setMhdText(''); setOutKg('')
+      setInputs([{ lot_id: '', kg: '' }])
+      await loadListing()
+    } catch (e: any) {
+      setCreateErr(e.message ?? String(e))
     } finally {
       setBusy(false)
     }
   }
 
+  // Varianten gefiltert zum ausgewählten Produkt
+  const productVariants = useMemo(
+    () => variants.filter(v => v.product_id === productId),
+    [variants, productId]
+  )
+
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-medium">Produktion anlegen</h2>
+      <h2 className="text-lg font-semibold">Produktionen</h2>
 
-      <form onSubmit={onCreate} className="border rounded p-4 space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <label className="text-sm">
-            Produkt
-            <select className="border rounded px-2 py-2 w-full"
-              value={form.product_id}
-              onChange={e => setForm({ ...form, product_id: e.target.value, variant_id: '' })}
-              required
-            >
-              <option value="">— wählen —</option>
-              {productOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
+      {/* Listing */}
+      <div className="flex items-center justify-between gap-3">
+        <input
+          className="border rounded px-3 py-2 w-full max-w-md text-sm"
+          placeholder="Filtern (Datum, Produkt/Charge)…"
+          value={q} onChange={e=>setQ(e.target.value)}
+        />
+        <div className="text-sm text-slate-500">{filteredRuns.length} von {runs.length}</div>
+      </div>
 
-          <label className="text-sm">
-            Variante
-            <select className="border rounded px-2 py-2 w-full"
-              value={form.variant_id}
-              onChange={e => setForm({ ...form, variant_id: e.target.value })}
-            >
-              <option value="">— optional —</option>
-              {variantOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-
-          <label className="text-sm">
-            Produktionsdatum
-            <input className="border rounded px-3 py-2 w-full" type="date"
-              value={form.run_date} onChange={e => setForm({ ...form, run_date: e.target.value })}/>
-          </label>
-
-          <div className="text-sm grid grid-cols-2 gap-2">
-            <label>
-              Output (kg)
-              <input className="border rounded px-3 py-2 w-full" placeholder="z. B. 125.0"
-                value={form.output_kg} onChange={e => setForm({ ...form, output_kg: e.target.value, units: '' })}/>
-            </label>
-            <label>
-              Units (Packungen)
-              <input className="border rounded px-3 py-2 w-full" placeholder="falls kg nicht angegeben"
-                value={form.units} onChange={e => setForm({ ...form, units: e.target.value, output_kg: '' })}/>
-            </label>
-          </div>
-
-          <label className="text-sm">
-            MHD (Text)
-            <input className="border rounded px-3 py-2 w-full" placeholder="frei (z. B. 2026-06)"
-              value={form.mhd_text} onChange={e => setForm({ ...form, mhd_text: e.target.value })}/>
-          </label>
-          <label className="text-sm">
-            Charge (Text)
-            <input className="border rounded px-3 py-2 w-full" placeholder="frei (z. B. AB123)"
-              value={form.batch_code} onChange={e => setForm({ ...form, batch_code: e.target.value })}/>
-          </label>
-
-          <label className="text-sm">
-            Quelle (Lager)
-            <select className="border rounded px-2 py-2 w-full"
-              value={form.src_wh} onChange={e => setForm({ ...form, src_wh: e.target.value })} required>
-              {whOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">
-            Ziel (Lager)
-            <select className="border rounded px-2 py-2 w-full"
-              value={form.dst_wh} onChange={e => setForm({ ...form, dst_wh: e.target.value })} required>
-              {whOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-        </div>
-
-        <div className="mt-2">
-          <div className="font-medium mb-2">Rohkaffee-Inputs</div>
-          <div className="space-y-2">
-            {inputs.map((r, i) => (
-              <div key={i} className="grid grid-cols-[1fr_140px_80px] gap-2 items-center">
-                <select className="border rounded px-2 py-2"
-                  value={r.lot_id} onChange={e => updateInputRow(i, { lot_id: e.target.value })}>
-                  <option value="">— Lot wählen —</option>
-                  {lotOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-                <input className="border rounded px-3 py-2" placeholder="Menge (kg)"
-                  value={r.qty_kg} onChange={e => updateInputRow(i, { qty_kg: e.target.value })}/>
-                <button type="button" className="text-sm text-slate-700 underline" onClick={() => removeInputRow(i)}>entf.</button>
-              </div>
+      <div className="border rounded overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="text-left p-2">Datum</th>
+              <th className="text-left p-2">Produkte/Chargen</th>
+              <th className="text-left p-2">Inputs (Lots)</th>
+              <th className="text-left p-2">Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRuns.map(r => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">{(r.happened_at ?? r.created_at ?? '').slice(0,10)}</td>
+                <td className="p-2">{finByRun[r.id] ?? '—'}</td>
+                <td className="p-2">{inpByRun[r.id] ?? 0}</td>
+                <td className="p-2">
+                  <button
+                    className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
+                    onClick={()=>deleteRun(r.id)}
+                  >
+                    Löschen
+                  </button>
+                </td>
+              </tr>
             ))}
-            <button type="button" className="rounded bg-slate-200 px-3 py-1 text-sm" onClick={addInputRow}>+ Zeile</button>
+            {filteredRuns.length === 0 && (
+              <tr><td className="p-2" colSpan={4}>Keine Produktionen gefunden.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {listErr && <div className="text-red-600 text-sm">{listErr}</div>}
+
+      {/* Create new run */}
+      <div className="border rounded p-4 space-y-4">
+        <h3 className="font-medium">Neuen Produktionslauf anlegen</h3>
+
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <label>Datum
+            <input type="date" className="border rounded px-3 py-2 w-full"
+                   value={happenedAt} onChange={e=>setHappenedAt(e.target.value)} />
+          </label>
+          <label>Quell‑Lager (grün)
+            <select className="border rounded px-3 py-2 w-full"
+                    value={whSource} onChange={e=>setWhSource(e.target.value)}>
+              <option value="">— wählen —</option>
+              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <label className="col-span-1">Produkt (optional)
+            <select className="border rounded px-3 py-2 w-full"
+                    value={productId} onChange={e=>{ setProductId(e.target.value); setVariantId('') }}>
+              <option value="">—</option>
+              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <label className="col-span-1">Variante
+            <select className="border rounded px-3 py-2 w-full"
+                    value={variantId} onChange={e=>setVariantId(e.target.value)} disabled={!productId}>
+              <option value="">—</option>
+              {productVariants.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.packaging_type === 'bag' && v.net_weight_g ? `Beutel ${v.net_weight_g}g`
+                   : v.packaging_type === 'capsule_pack' ? `Kapseln ${v.capsules_per_pack}×${v.grams_per_capsule}g`
+                   : 'Variante'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="col-span-1">Ausbringung (kg, optional)
+            <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
+                   value={outKg} onChange={e=>setOutKg(e.target.value)} />
+          </label>
+
+          <label className="col-span-1">Charge (optional)
+            <input className="border rounded px-3 py-2 w-full"
+                   value={batchCode} onChange={e=>setBatchCode(e.target.value)} />
+          </label>
+          <label className="col-span-1">MHD (Text, optional)
+            <input className="border rounded px-3 py-2 w-full"
+                   value={mhdText} onChange={e=>setMhdText(e.target.value)} />
+          </label>
+        </div>
+
+        {/* Inputs */}
+        <div className="space-y-2">
+          <div className="font-medium text-sm">Verwendete Rohkaffee‑Lots</div>
+          {inputs.map((row, idx) => (
+            <div key={idx} className="grid grid-cols-4 gap-3 text-sm">
+              <label className="col-span-3">Lot
+                <select className="border rounded px-3 py-2 w-full"
+                        value={row.lot_id}
+                        onChange={e=>updateInput(idx, { lot_id: e.target.value })}>
+                  <option value="">— wählen —</option>
+                  {lots.map(l => <option key={l.id} value={l.id}>{l.short_desc ?? l.id}</option>)}
+                </select>
+              </label>
+              <label>Menge (kg)
+                <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
+                       value={row.kg}
+                       onChange={e=>updateInput(idx, { kg: e.target.value })}/>
+              </label>
+            </div>
+          ))}
+          <div className="flex gap-2">
+            <button className="rounded bg-slate-200 px-3 py-1 text-sm" onClick={()=>addRow()}>+ Lot</button>
+            {inputs.length > 1 && (
+              <button className="rounded bg-slate-200 px-3 py-1 text-sm" onClick={()=>removeLast()}>– letzte Zeile</button>
+            )}
           </div>
         </div>
 
-        <div className="text-right">
-          <button disabled={busy} className="rounded bg-green-700 text-white px-3 py-1.5 text-sm">
-            {busy ? 'Speichere…' : 'Produktion speichern'}
+        <div className="flex items-center justify-between">
+          {createErr && <div className="text-red-600 text-sm">{createErr}</div>}
+          <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={createRun} disabled={busy}>
+            {busy ? 'Speichere…' : 'Produktion anlegen'}
           </button>
         </div>
-
-        {err && <div className="text-red-600 text-sm">{err}</div>}
-      </form>
+      </div>
     </div>
   )
+
+  function updateInput(i: number, patch: Partial<InputRow>) {
+    setInputs(prev => {
+      const copy = [...prev]
+      copy[i] = { ...copy[i], ...patch }
+      return copy
+    })
+  }
+  function addRow() { setInputs(prev => [...prev, { lot_id: '', kg: '' }]) }
+  function removeLast() { setInputs(prev => prev.slice(0, -1)) }
 }
