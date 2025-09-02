@@ -41,8 +41,26 @@ type Form = {
 }
 
 const COUNTRIES = [
-  'Brazil','Colombia','Ethiopia','Vietnam','Honduras','Peru','Uganda','Mexico','Guatemala','Nicaragua','Costa Rica','Kenya','Tanzania','Rwanda','Burundi','Panama','El Salvador','Indonesia','India','Papua New Guinea','Bolivia','Yemen','China','Dominican Republic','Congo','C\u00F4te d’Ivoire'
+  'Brazil','Colombia','Ethiopia','Vietnam','Honduras','Peru','Uganda','Mexico','Guatemala','Nicaragua',
+  'Costa Rica','Kenya','Tanzania','Rwanda','Burundi','Panama','El Salvador','Indonesia','India',
+  'Papua New Guinea','Bolivia','Yemen','China','Dominican Republic','Congo','C\u00F4te d\u2019Ivoire'
 ]
+
+// KC = Mar, May, Jul, Sep, Dec; RC = Jan, Mar, May, Jul, Sep, Nov (ICE-Spezifikationen)
+// KC = 03,05,07,09,12 ; RC = 01,03,05,07,09,11. :contentReference[oaicite:2]{index=2}
+function futuresMonths(contract: 'KC'|'RC', count = 18): string[] {
+  const allowed = contract === 'KC' ? [3,5,7,9,12] : [1,3,5,7,9,11]
+  const out: string[] = []
+  const d = new Date()
+  d.setDate(1)
+  for (let i = 0; out.length < count && i < 60; i++) {
+    const y = d.getFullYear()
+    const m = d.getMonth() + 1
+    if (allowed.includes(m)) out.push(`${y}-${String(m).padStart(2, '0')}`)
+    d.setMonth(d.getMonth() + 1)
+  }
+  return out
+}
 
 export default function Lots() {
   const [rows, setRows] = useState<LotRow[]>([])
@@ -56,17 +74,24 @@ export default function Lots() {
     organic: false,
     species: 'arabica',
     status: 'contracted',
-    price_scheme: 'fixed_eur',
+
+    price_scheme: 'fixed_eur',               // bewusst locker: kein Preiszwang
     price_fixed_eur_per_kg: '',
     price_fixed_usd_per_lb: '',
     price_diff_cents_per_lb: '',
     price_base_contract: 'KC',
     price_base_month: '',
+
     initial_warehouse_id: '',
     initial_kg: ''
   })
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const monthOptions = useMemo(
+    () => futuresMonths(form.price_base_contract, 18),
+    [form.price_base_contract]
+  )
 
   useEffect(() => { void loadAll() }, [])
   async function loadAll() {
@@ -92,6 +117,13 @@ export default function Lots() {
   async function createLot() {
     setErr(null); setBusy(true)
     try {
+      // Sanfte Formularprüfung für Differential:
+      if (form.price_scheme === 'differential') {
+        if (!form.price_base_contract || !form.price_base_month || form.price_diff_cents_per_lb === '') {
+          throw new Error('Bitte Basis (KC/RC), Liefermonat und Differential (c/lb) ausfüllen.')
+        }
+      }
+
       const prof = await supabase.from('profiles').select('org_id').maybeSingle()
       if (prof.error) throw prof.error
       const orgId = prof.data?.org_id
@@ -106,10 +138,17 @@ export default function Lots() {
         status: form.status,
         dds_reference: form.dds_reference || null,
         external_contract_no: form.external_contract_no || null,
+
         price_scheme: form.price_scheme,
-        price_fixed_eur_per_kg: form.price_scheme === 'fixed_eur' ? (form.price_fixed_eur_per_kg ? Number(form.price_fixed_eur_per_kg) : null) : null,
-        price_fixed_usd_per_lb: form.price_scheme === 'fixed_usd' ? (form.price_fixed_usd_per_lb ? Number(form.price_fixed_usd_per_lb) : null) : null,
-        price_diff_cents_per_lb: form.price_scheme === 'differential' ? (form.price_diff_cents_per_lb ? Number(form.price_diff_cents_per_lb) : null) : null,
+        price_fixed_eur_per_kg: form.price_scheme === 'fixed_eur'
+          ? (form.price_fixed_eur_per_kg ? Number(form.price_fixed_eur_per_kg) : null)
+          : null,
+        price_fixed_usd_per_lb: form.price_scheme === 'fixed_usd'
+          ? (form.price_fixed_usd_per_lb ? Number(form.price_fixed_usd_per_lb) : null)
+          : null,
+        price_diff_cents_per_lb: form.price_scheme === 'differential'
+          ? (form.price_diff_cents_per_lb ? Number(form.price_diff_cents_per_lb) : null)
+          : null,
         price_base_contract: form.price_scheme === 'differential' ? form.price_base_contract : null,
         price_base_month: form.price_scheme === 'differential' ? (form.price_base_month || null) : null
       }
@@ -128,13 +167,23 @@ export default function Lots() {
           delta_kg: initKg,
           warehouse_id: form.initial_warehouse_id,
           note: 'initial stock',
-          direction: 'in'
+          direction: 'in'    // wird auch per Trigger abgesichert
         }])
         if (mv.error) throw mv.error
       }
 
       // Reset & Refresh
-      setForm(f => ({ ...f, short_desc: '', external_contract_no: '', dds_reference: '', initial_kg: '' }))
+      setForm(f => ({
+        ...f,
+        short_desc: '',
+        external_contract_no: '',
+        dds_reference: '',
+        price_fixed_eur_per_kg: '',
+        price_fixed_usd_per_lb: '',
+        price_diff_cents_per_lb: '',
+        price_base_month: '',
+        initial_kg: ''
+      }))
       await loadAll()
       alert('Lot angelegt.')
     } catch (e: any) {
@@ -146,7 +195,6 @@ export default function Lots() {
 
   async function deleteLot(id: string) {
     if (!confirm('Lot wirklich löschen?')) return
-    // Versucht hard delete; falls RLS/Foreign Keys blocken, bekommst du eine klare Meldung
     const res = await supabase.from('green_lots').delete().eq('id', id)
     if (res.error) alert(res.error.message)
     else setRows(prev => prev.filter(r => r.id !== id))
@@ -256,12 +304,25 @@ export default function Lots() {
         <div className="grid grid-cols-3 gap-3 text-sm">
           <label>Preisschema
             <select className="border rounded px-3 py-2 w-full"
-                    value={form.price_scheme} onChange={e=>setForm(f=>({ ...f, price_scheme: e.target.value as Form['price_scheme'] }))}>
+                    value={form.price_scheme}
+                    onChange={e=>{
+                      const val = e.target.value as Form['price_scheme']
+                      setForm(f=>({
+                        ...f,
+                        price_scheme: val,
+                        // irrelevante Felder leeren
+                        price_fixed_eur_per_kg: val==='fixed_eur' ? f.price_fixed_eur_per_kg : '',
+                        price_fixed_usd_per_lb: val==='fixed_usd' ? f.price_fixed_usd_per_lb : '',
+                        price_diff_cents_per_lb: val==='differential' ? f.price_diff_cents_per_lb : '',
+                        price_base_month: val==='differential' ? f.price_base_month : ''
+                      }))
+                    }}>
               <option value="fixed_eur">Fixiert in EUR/kg</option>
               <option value="fixed_usd">Fixiert in USD/lb</option>
               <option value="differential">Differential (c/lb)</option>
             </select>
           </label>
+
           {form.price_scheme === 'fixed_eur' && (
             <label>EUR/kg
               <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
@@ -276,6 +337,7 @@ export default function Lots() {
                      onChange={e=>setForm(f=>({ ...f, price_fixed_usd_per_lb: e.target.value }))} />
             </label>
           )}
+
           {form.price_scheme === 'differential' && (
             <>
               <label>Basis (KC=Arabica / RC=Robusta)
@@ -286,10 +348,13 @@ export default function Lots() {
                   <option value="RC">RC</option>
                 </select>
               </label>
-              <label>Liefermonat (z.B. 2025‑12)
-                <input className="border rounded px-3 py-2 w-full"
-                       value={form.price_base_month}
-                       onChange={e=>setForm(f=>({ ...f, price_base_month: e.target.value }))} />
+              <label>Liefermonat
+                <select className="border rounded px-3 py-2 w-full"
+                        value={form.price_base_month}
+                        onChange={e=>setForm(f=>({ ...f, price_base_month: e.target.value }))}>
+                  <option value="">— wählen —</option>
+                  {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
               </label>
               <label>Differential (c/lb, +/‑)
                 <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
