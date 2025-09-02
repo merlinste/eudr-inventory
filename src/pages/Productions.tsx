@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
-type Run = { id: string; created_at: string | null; happened_at: string | null }
+type Run = { id: string; created_at: string | null; run_date: string | null; happened_at: string | null }
 type Warehouse = { id: string; name: string; w_type: string }
 type Lot = { id: string; short_desc: string | null }
 type Product = { id: string; name: string }
@@ -16,43 +16,40 @@ type Variant = {
 type InputRow = { lot_id: string; kg: string }
 
 export default function Productions() {
-  // Listing
   const [runs, setRuns] = useState<Run[]>([])
   const [finByRun, setFinByRun] = useState<Record<string, string>>({})
   const [inpByRun, setInpByRun] = useState<Record<string, number>>({})
   const [listErr, setListErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Form‑Optionen
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [lots, setLots] = useState<Lot[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [variants, setVariants] = useState<Variant[]>([])
 
-  // Formularzustand
   const today = new Date().toISOString().slice(0, 10)
   const [happenedAt, setHappenedAt] = useState<string>(today)
-  const [whSource, setWhSource] = useState<string>('')      // Quelle (grün)
+  const [whSource, setWhSource] = useState<string>('')
+
   const [productId, setProductId] = useState<string>('')
-  const [variantId, setVariantId] = useState<string>('')    // optional
+  const [variantId, setVariantId] = useState<string>('')
   const [batchCode, setBatchCode] = useState<string>('')    // optional
   const [mhdText, setMhdText] = useState<string>('')        // optional
-  const [outKg, setOutKg] = useState<string>('')            // optional (Dokumentation)
+  const [outKg, setOutKg] = useState<string>('')            // optional
+
   const [inputs, setInputs] = useState<InputRow[]>([{ lot_id: '', kg: '' }])
 
   const [q, setQ] = useState('')
   const [createErr, setCreateErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // ---------- Daten laden ----------
-  useEffect(() => {
-    loadListing()
-    loadFormData()
-  }, [])
+  useEffect(() => { loadListing(); loadFormData() }, [])
 
   async function loadListing() {
     setLoading(true); setListErr(null)
-    const r = await supabase.from('production_runs').select('id,created_at,happened_at').order('created_at', { ascending: false })
+    const r = await supabase.from('production_runs')
+      .select('id,created_at,run_date,happened_at')
+      .order('created_at', { ascending: false })
     if (r.error) { setListErr(r.error.message); setLoading(false); return }
     const runRows = (r.data ?? []) as Run[]
     setRuns(runRows)
@@ -103,12 +100,11 @@ export default function Productions() {
     const t = q.trim().toLowerCase()
     if (!t) return runs
     return runs.filter(r =>
-      (r.happened_at ?? r.created_at ?? '').toLowerCase().includes(t) ||
+      (r.run_date ?? r.happened_at ?? r.created_at ?? '').toLowerCase().includes(t) ||
       (finByRun[r.id] ?? '').toLowerCase().includes(t)
     )
   }, [runs, q, finByRun])
 
-  // ---------- Löschen ----------
   async function deleteRun(id: string) {
     if (!confirm('Produktion wirklich löschen?')) return
     const res = await supabase.rpc('safe_delete_production_run', { p_id: id })
@@ -116,26 +112,25 @@ export default function Productions() {
     else setRuns(prev => prev.filter(x => x.id !== id))
   }
 
-  // ---------- Anlegen ----------
   async function createRun() {
     setCreateErr(null); setBusy(true)
     try {
       if (!inputs.some(i => i.lot_id && parseFloat(i.kg) > 0)) {
         throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
       }
-      if (!whSource) throw new Error('Quell‑Lager (für grünen Verbrauch) wählen.')
+      if (!whSource) throw new Error('Quell‑Lager (grün) wählen.')
 
-      // org_id aus Profil laden (lokal in dieser Funktion!)
       const prof = await supabase.from('profiles').select('org_id').maybeSingle()
       if (prof.error) throw prof.error
       const orgId = prof.data?.org_id
       if (!orgId) throw new Error('Kein org_id im Profil.')
 
-      // 1) Run
+      // 1) Run (jetzt mit run_date)
       const runIns = await supabase.from('production_runs').insert([{
         org_id: orgId,
-        producer_org_id: orgId,            // explizit setzen
-        happened_at: happenedAt || null
+        producer_org_id: orgId,
+        run_date: happenedAt,              // <-- wichtig
+        happened_at: happenedAt || null    // optional, falls Feld existiert
       }]).select('id').single()
       if (runIns.error) throw runIns.error
       const runId = runIns.data!.id as string
@@ -160,7 +155,7 @@ export default function Productions() {
         if (riIns.error) throw riIns.error
       }
 
-      // 4) negative GREEN‑Moves (RLS kann blockieren → Hinweis)
+      // 4) negative GREEN‑Moves
       const greenMoves = inputs
         .filter(i => i.lot_id && parseFloat(i.kg) > 0)
         .map(i => ({
@@ -176,7 +171,7 @@ export default function Productions() {
         if (mvIns.error) alert('Run gespeichert, aber Bestandsbuchung (GREEN) blockiert: ' + mvIns.error.message)
       }
 
-      // Reset & Reload
+      // Reset
       setHappenedAt(today); setWhSource('')
       setProductId(''); setVariantId('')
       setBatchCode(''); setMhdText(''); setOutKg('')
@@ -200,7 +195,6 @@ export default function Productions() {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold">Produktionen</h2>
 
-      {/* Listing */}
       <div className="flex items-center justify-between gap-3">
         <input className="border rounded px-3 py-2 w-full max-w-md text-sm"
                placeholder="Filtern (Datum, Produkt/Charge)…"
@@ -221,7 +215,7 @@ export default function Productions() {
           <tbody>
             {filteredRuns.map(r => (
               <tr key={r.id} className="border-t">
-                <td className="p-2">{(r.happened_at ?? r.created_at ?? '').slice(0,10)}</td>
+                <td className="p-2">{(r.run_date ?? r.happened_at ?? r.created_at ?? '').slice(0,10)}</td>
                 <td className="p-2">{finByRun[r.id] ?? '—'}</td>
                 <td className="p-2">{inpByRun[r.id] ?? 0}</td>
                 <td className="p-2">
@@ -329,11 +323,7 @@ export default function Productions() {
   )
 
   function updateInput(i: number, patch: Partial<InputRow>) {
-    setInputs(prev => {
-      const copy = [...prev]
-      copy[i] = { ...copy[i], ...patch }
-      return copy
-    })
+    setInputs(prev => { const copy = [...prev]; copy[i] = { ...copy[i], ...patch }; return copy })
   }
   function addRow() { setInputs(prev => [...prev, { lot_id: '', kg: '' }]) }
   function removeLast() { setInputs(prev => prev.slice(0, -1)) }
