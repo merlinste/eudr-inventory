@@ -233,6 +233,21 @@ export default function Lots() {
               <th className="text-left p-2">Aktion</th>
             </tr>
           </thead>
+          <td className="p-2">
+            <div className="flex items-center gap-3">
+             <a href={`/lots/${r.id}`} className="text-sky-700 underline">Details</a>
+             <button
+              className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
+              onClick={async ()=>{
+               if (!confirm('Wirklich löschen? Lot darf in keiner Produktion verwendet sein.')) return
+               const res = await supabase.rpc('safe_delete_green_lot', { p_id: r.id })
+               if (res.error) alert(res.error.message)
+               else setRows(prev => prev.filter(x => x.id !== r.id))
+              }}>
+              Löschen
+            </button>
+          </div>
+          </td>
           <tbody>
             {filtered.map(r => (
               <tr key={r.id} className="border-t">
