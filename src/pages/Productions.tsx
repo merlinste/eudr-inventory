@@ -101,7 +101,6 @@ export default function Productions() {
         balance_kg: Number(r.balance_kg ?? 0)
       })) as WhStock[]
       setWhStock(rows)
-      // Standard: erstes Lager mit Bestand vorselektieren
       const first = rows[0]
       if (first) setWhSource(first.warehouse_id)
     }
@@ -133,7 +132,7 @@ export default function Productions() {
       if (!valid.length) throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
       if (!whSource) throw new Error('Quell‑Lager (grün) wählen.')
 
-      // Vorabprüfung: für jedes Lot muss im gewählten Lager genug Bestand liegen
+      // Vorab: je Lot genügender Bestand im Quell-Lager?
       for (const row of valid) {
         const need = Math.abs(parseFloat(row.kg))
         const bal = await supabase.rpc('rpc_green_lot_balances', { p_lot_id: row.lot_id })
@@ -151,7 +150,7 @@ export default function Productions() {
       const orgId = prof.data?.org_id
       if (!orgId) throw new Error('Kein org_id im Profil.')
 
-      // 1) Run – nur run_date setzen (NOT NULL)
+      // 1) Produktions-Run
       const runIns = await supabase.from('production_runs').insert([{
         org_id: orgId,
         producer_org_id: orgId,
@@ -188,7 +187,7 @@ export default function Productions() {
         warehouse_id: whSource,
         production_run_id: runId,
         note: 'production consumption',
-        direction: 'out'            // <-- NEU
+        direction: 'out'
       }))
       const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
       if (mvIns.error) throw mvIns.error
@@ -349,6 +348,12 @@ export default function Productions() {
       </div>
     </div>
   )
+
+  function updateInput(i: number, patch: Partial<InputRow>) {
+    setInputs(prev => { const copy = [...prev]; copy[i] = { ...copy[i], ...patch }; return copy })
+  }
+  function addRow() { setInputs(prev => [...prev, { lot_id: '', kg: '' }]) }
+  function removeLast() { setInputs(prev => prev.slice(0, -1)) }
 }
 
 function fmtKg(n: number | null | undefined) {
