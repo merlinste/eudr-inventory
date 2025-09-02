@@ -13,9 +13,6 @@ type Variant = {
   capsules_per_pack: number | null;
   grams_per_capsule: number | null;
 }
-type FinishedAgg = { production_run_id: string; label: string }
-type InputAgg = { production_run_id: string; count: number }
-
 type InputRow = { lot_id: string; kg: string }
 
 export default function Productions() {
@@ -26,75 +23,62 @@ export default function Productions() {
   const [listErr, setListErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Create form
+  // Form‑Optionen
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [lots, setLots] = useState<Lot[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [variants, setVariants] = useState<Variant[]>([])
+
+  // Formularzustand
+  const today = new Date().toISOString().slice(0, 10)
+  const [happenedAt, setHappenedAt] = useState<string>(today)
+  const [whSource, setWhSource] = useState<string>('')      // Quelle (grün)
+  const [productId, setProductId] = useState<string>('')
+  const [variantId, setVariantId] = useState<string>('')    // optional
+  const [batchCode, setBatchCode] = useState<string>('')    // optional
+  const [mhdText, setMhdText] = useState<string>('')        // optional
+  const [outKg, setOutKg] = useState<string>('')            // optional (Dokumentation)
+  const [inputs, setInputs] = useState<InputRow[]>([{ lot_id: '', kg: '' }])
+
+  const [q, setQ] = useState('')
   const [createErr, setCreateErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Form state
-  const today = new Date().toISOString().slice(0,10)
-  const [happenedAt, setHappenedAt] = useState<string>(today)
-  const [whSource, setWhSource] = useState<string>('')      // Quelle für grünen Verbrauch (wichtig für Inventur)
-  const [productId, setProductId] = useState<string>('')    // optional: fertiges Produkt/Charge dokumentieren
-  const [variantId, setVariantId] = useState<string>('')
-  const [batchCode, setBatchCode] = useState<string>('')
-  const [mhdText, setMhdText] = useState<string>('')
-  const [outKg, setOutKg] = useState<string>('')            // optionale Angabe; Bestandsbuchung (FINISHED) ist im MVP deaktiviert
-  const [inputs, setInputs] = useState<InputRow[]>([{ lot_id: '', kg: '' }])
+  // ---------- Daten laden ----------
+  useEffect(() => {
+    loadListing()
+    loadFormData()
+  }, [])
 
-  // Filter/Anzeige
-  const [q, setQ] = useState('')
-
-  // ---------- Load listing ----------
   async function loadListing() {
     setLoading(true); setListErr(null)
-    // 1) Läufe
     const r = await supabase.from('production_runs').select('id,created_at,happened_at').order('created_at', { ascending: false })
     if (r.error) { setListErr(r.error.message); setLoading(false); return }
     const runRows = (r.data ?? []) as Run[]
     setRuns(runRows)
 
-    const runIns = await supabase.from('production_runs').insert([{
-      org_id: orgId,
-      producer_org_id: orgId,        // <— redundant zum Default, aber explizit
-      happened_at: happenedAt || null
-    }]).select('id').single()
-
     const ids = runRows.map(x => x.id)
     if (ids.length === 0) { setFinByRun({}); setInpByRun({}); setLoading(false); return }
 
-    // 2) Aggregierte Inputs
-    const ri = await supabase.from('run_inputs').select('production_run_id, green_lot_id').in('production_run_id', ids)
+    const ri = await supabase.from('run_inputs').select('production_run_id').in('production_run_id', ids)
     const inpMap: Record<string, number> = {}
-    if (!ri.error) {
-      for (const row of (ri.data ?? []) as { production_run_id: string }[]) {
-        inpMap[row.production_run_id] = (inpMap[row.production_run_id] ?? 0) + 1
-      }
+    if (!ri.error) for (const row of (ri.data ?? []) as { production_run_id: string }[]) {
+      inpMap[row.production_run_id] = (inpMap[row.production_run_id] ?? 0) + 1
     }
 
-    // 3) Aggregierte fertige Batches (Produktnamen sammeln)
     const fb = await supabase.from('finished_batches')
       .select('production_run_id, batch_code, mhd_text, products(name)')
       .in('production_run_id', ids)
     const finMap: Record<string, string> = {}
     if (!fb.error) {
-      const byRun: Record<string, { prod: string[], meta: string[] }> = {}
+      const byRun: Record<string, string[]> = {}
       for (const row of (fb.data ?? []) as any[]) {
-        const rid = row.production_run_id
-        byRun[rid] ||= { prod: [], meta: [] }
         const pname = row.products?.name as (string | null)
-        if (pname && !byRun[rid].prod.includes(pname)) byRun[rid].prod.push(pname)
-        const meta = [row.batch_code, row.mhd_text].filter(Boolean).join(' / ')
-        if (meta) byRun[rid].meta.push(meta)
+        const meta = [pname, row.batch_code, row.mhd_text].filter(Boolean).join(' / ')
+        if (!byRun[row.production_run_id]) byRun[row.production_run_id] = []
+        if (meta) byRun[row.production_run_id].push(meta)
       }
-      for (const [rid, v] of Object.entries(byRun)) {
-        const left = v.prod.join(', ') || '—'
-        const right = v.meta.length ? ` (${v.meta.join('; ')})` : ''
-        finMap[rid] = left + right
-      }
+      for (const [rid, v] of Object.entries(byRun)) finMap[rid] = v.join('; ')
     }
 
     setInpByRun(inpMap)
@@ -102,26 +86,18 @@ export default function Productions() {
     setLoading(false)
   }
 
-  // ---------- Load form options ----------
   async function loadFormData() {
-    setCreateErr(null)
     const [wh, gl, p, v] = await Promise.all([
       supabase.from('v_my_warehouses').select('id,name,w_type').order('name'),
       supabase.from('green_lots').select('id,short_desc').order('created_at', { ascending: false }),
       supabase.from('products').select('id,name').order('name'),
       supabase.from('product_variants').select('id,product_id,packaging_type,net_weight_g,capsules_per_pack,grams_per_capsule')
     ])
-    if (wh.error) setCreateErr(wh.error.message)
-    if (gl.error) setCreateErr(gl.error.message || null)
-    if (p.error) setCreateErr(p.error.message || null)
-    if (v.error) setCreateErr(v.error.message || null)
-    setWarehouses((wh.data ?? []) as Warehouse[])
-    setLots((gl.data ?? []) as Lot[])
-    setProducts((p.data ?? []) as Product[])
-    setVariants((v.data ?? []) as Variant[])
+    if (!wh.error) setWarehouses((wh.data ?? []) as Warehouse[])
+    if (!gl.error) setLots((gl.data ?? []) as Lot[])
+    if (!p.error) setProducts((p.data ?? []) as Product[])
+    if (!v.error) setVariants((v.data ?? []) as Variant[])
   }
-
-  useEffect(() => { loadListing(); loadFormData() }, [])
 
   const filteredRuns = useMemo(() => {
     const t = q.trim().toLowerCase()
@@ -132,36 +108,33 @@ export default function Productions() {
     )
   }, [runs, q, finByRun])
 
-  // ---------- Delete a run ----------
+  // ---------- Löschen ----------
   async function deleteRun(id: string) {
     if (!confirm('Produktion wirklich löschen?')) return
     const res = await supabase.rpc('safe_delete_production_run', { p_id: id })
-    if (res.error) {
-      alert(res.error.message)
-    } else {
-      setRuns(prev => prev.filter(x => x.id !== id))
-    }
+    if (res.error) alert(res.error.message)
+    else setRuns(prev => prev.filter(x => x.id !== id))
   }
 
-  // ---------- Create a run ----------
+  // ---------- Anlegen ----------
   async function createRun() {
     setCreateErr(null); setBusy(true)
     try {
-      // einfache Validierungen
       if (!inputs.some(i => i.lot_id && parseFloat(i.kg) > 0)) {
         throw new Error('Mindestens ein Input‑Lot mit Menge erforderlich.')
       }
       if (!whSource) throw new Error('Quell‑Lager (für grünen Verbrauch) wählen.')
 
-      // org_id besorgen
+      // org_id aus Profil laden (lokal in dieser Funktion!)
       const prof = await supabase.from('profiles').select('org_id').maybeSingle()
       if (prof.error) throw prof.error
       const orgId = prof.data?.org_id
       if (!orgId) throw new Error('Kein org_id im Profil.')
 
-      // 1) Run anlegen
+      // 1) Run
       const runIns = await supabase.from('production_runs').insert([{
         org_id: orgId,
+        producer_org_id: orgId,            // explizit setzen
         happened_at: happenedAt || null
       }]).select('id').single()
       if (runIns.error) throw runIns.error
@@ -178,15 +151,16 @@ export default function Productions() {
         if (fbIns.error) throw fbIns.error
       }
 
-      // 3) run_inputs (Dokumentation der Lots, kg separat über inventory_moves)
-      const inputRows = inputs.filter(i => i.lot_id && parseFloat(i.kg) > 0)
-                              .map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
+      // 3) run_inputs (Dokumentation)
+      const inputRows = inputs
+        .filter(i => i.lot_id && parseFloat(i.kg) > 0)
+        .map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
       if (inputRows.length) {
         const riIns = await supabase.from('run_inputs').insert(inputRows)
         if (riIns.error) throw riIns.error
       }
 
-      // 4) Bestandsbewegungen (GREEN, negativ) – optional je nach RLS
+      // 4) negative GREEN‑Moves (RLS kann blockieren → Hinweis)
       const greenMoves = inputs
         .filter(i => i.lot_id && parseFloat(i.kg) > 0)
         .map(i => ({
@@ -199,17 +173,13 @@ export default function Productions() {
         }))
       if (greenMoves.length) {
         const mvIns = await supabase.from('inventory_moves').insert(greenMoves)
-        if (mvIns.error) {
-          // Kein Abbruch des gesamten Vorgangs – Nutzer informieren:
-          console.warn('inventory_moves insert blocked by RLS?', mvIns.error)
-          alert('Hinweis: Run wurde angelegt, aber Bestandsbuchung (GREEN) war nicht erlaubt. Bitte INSERT‑Policy oder RPC aktivieren.')
-        }
+        if (mvIns.error) alert('Run gespeichert, aber Bestandsbuchung (GREEN) blockiert: ' + mvIns.error.message)
       }
 
       // Reset & Reload
-      setHappenedAt(today)
-      setWhSource('')
-      setProductId(''); setVariantId(''); setBatchCode(''); setMhdText(''); setOutKg('')
+      setHappenedAt(today); setWhSource('')
+      setProductId(''); setVariantId('')
+      setBatchCode(''); setMhdText(''); setOutKg('')
       setInputs([{ lot_id: '', kg: '' }])
       await loadListing()
     } catch (e: any) {
@@ -219,11 +189,12 @@ export default function Productions() {
     }
   }
 
-  // Varianten gefiltert zum ausgewählten Produkt
   const productVariants = useMemo(
     () => variants.filter(v => v.product_id === productId),
     [variants, productId]
   )
+
+  if (loading) return <div>Lade…</div>
 
   return (
     <div className="space-y-6">
@@ -231,11 +202,9 @@ export default function Productions() {
 
       {/* Listing */}
       <div className="flex items-center justify-between gap-3">
-        <input
-          className="border rounded px-3 py-2 w-full max-w-md text-sm"
-          placeholder="Filtern (Datum, Produkt/Charge)…"
-          value={q} onChange={e=>setQ(e.target.value)}
-        />
+        <input className="border rounded px-3 py-2 w-full max-w-md text-sm"
+               placeholder="Filtern (Datum, Produkt/Charge)…"
+               value={q} onChange={e=>setQ(e.target.value)} />
         <div className="text-sm text-slate-500">{filteredRuns.length} von {runs.length}</div>
       </div>
 
@@ -256,24 +225,20 @@ export default function Productions() {
                 <td className="p-2">{finByRun[r.id] ?? '—'}</td>
                 <td className="p-2">{inpByRun[r.id] ?? 0}</td>
                 <td className="p-2">
-                  <button
-                    className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
-                    onClick={()=>deleteRun(r.id)}
-                  >
+                  <button className="rounded bg-red-100 text-red-700 text-xs px-2 py-1"
+                          onClick={()=>deleteRun(r.id)}>
                     Löschen
                   </button>
                 </td>
               </tr>
             ))}
-            {filteredRuns.length === 0 && (
-              <tr><td className="p-2" colSpan={4}>Keine Produktionen gefunden.</td></tr>
-            )}
+            {filteredRuns.length === 0 && <tr><td className="p-2" colSpan={4}>Keine Produktionen gefunden.</td></tr>}
           </tbody>
         </table>
       </div>
       {listErr && <div className="text-red-600 text-sm">{listErr}</div>}
 
-      {/* Create new run */}
+      {/* Neues Run-Formular */}
       <div className="border rounded p-4 space-y-4">
         <h3 className="font-medium">Neuen Produktionslauf anlegen</h3>
 
@@ -318,12 +283,10 @@ export default function Productions() {
           </label>
 
           <label className="col-span-1">Charge (optional)
-            <input className="border rounded px-3 py-2 w-full"
-                   value={batchCode} onChange={e=>setBatchCode(e.target.value)} />
+            <input className="border rounded px-3 py-2 w-full" value={batchCode} onChange={e=>setBatchCode(e.target.value)} />
           </label>
           <label className="col-span-1">MHD (Text, optional)
-            <input className="border rounded px-3 py-2 w-full"
-                   value={mhdText} onChange={e=>setMhdText(e.target.value)} />
+            <input className="border rounded px-3 py-2 w-full" value={mhdText} onChange={e=>setMhdText(e.target.value)} />
           </label>
         </div>
 
