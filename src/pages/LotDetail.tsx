@@ -6,14 +6,10 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { Feature, FeatureCollection, Geometry, GeoJsonObject } from 'geojson'
 
-<div className="text-sm text-slate-600">
-  <span className="font-medium">Lot‑Nr.:</span> <span className="font-mono">{lot.lot_no}</span>
-  {' · '}
-  <span className="font-medium">Ursprung:</span> <span className="font-mono">{lot.root_lot_no}</span>
-</div>
-
 type Lot = {
   id: string
+  lot_no: string
+  root_lot_no: string
   short_desc: string | null
   external_contract_no: string | null
   dds_reference: string | null
@@ -22,6 +18,7 @@ type Lot = {
   species: 'arabica'|'robusta'|'other'
   status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null
 }
+
 type Wh = { id: string; name: string }
 type WhBalance = { warehouse_id: string; warehouse_name: string; balance_kg: number }
 
@@ -60,15 +57,19 @@ export default function LotDetail() {
 
   async function loadAll(lotId: string) {
     const [lr, wh, bal] = await Promise.all([
-      supabase.from('green_lots').select('id, short_desc, status, dds_reference, external_contract_no').eq('id', lotId).single(),
+      supabase
+        .from('green_lots')
+        .select('id, lot_no, root_lot_no, short_desc, status, dds_reference, external_contract_no, origin_country, organic, species')
+        .eq('id', lotId)
+        .single(),
       supabase.from('v_my_warehouses').select('id,name').order('name'),
       supabase.rpc('rpc_green_lot_balances', { p_lot_id: lotId })
     ])
 
     if (!lr.error && lr.data) {
-      setLot(lr.data as any)
+      setLot(lr.data as Lot)
       setShortDesc(lr.data.short_desc ?? '')
-      setStatus((lr.data.status ?? 'contracted') as any)
+      setStatus((lr.data.status ?? 'contracted') as Lot['status'])
       setDdsRef(lr.data.dds_reference ?? '')
       setExtNo(lr.data.external_contract_no ?? '')
       setNewShort(lr.data.short_desc ? `${lr.data.short_desc} (Teil)` : '')
@@ -130,6 +131,7 @@ export default function LotDetail() {
         geoLayerRef.current.clearLayers()
         if (features.length) {
           const fc: FeatureCollection<Geometry, any> = { type:'FeatureCollection', features }
+          // Leaflet erwartet GeoJsonObject
           geoLayerRef.current.addData(fc as unknown as GeoJsonObject)
           try { mapRef.current?.fitBounds(geoLayerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] }) } catch {}
         }
@@ -195,6 +197,15 @@ export default function LotDetail() {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold">Lot‑Details</h2>
 
+      {/* Infozeile: Lot-Nr. und Ursprungs-Lot */}
+      <div className="text-sm text-slate-600">
+        <span className="font-medium">Lot‑Nr.:</span>{' '}
+        <span className="font-mono">{lot.lot_no}</span>
+        {' · '}
+        <span className="font-medium">Ursprung:</span>{' '}
+        <span className="font-mono">{lot.root_lot_no}</span>
+      </div>
+
       {/* Stammdaten */}
       <div className="border rounded p-4 space-y-3">
         <h3 className="font-medium">Stammdaten bearbeiten</h3>
@@ -203,7 +214,7 @@ export default function LotDetail() {
             <input className="border rounded px-3 py-2 w-full" value={shortDesc} onChange={e=>setShortDesc(e.target.value)} />
           </label>
           <label>Status
-            <select className="border rounded px-3 py-2 w-full" value={status ?? 'contracted'} onChange={e=>setStatus(e.target.value as any)}>
+            <select className="border rounded px-3 py-2 w-full" value={status ?? 'contracted'} onChange={e=>setStatus(e.target.value as Lot['status'])}>
               <option value="contracted">Kontrahiert</option>
               <option value="price_fixed">Preis fixiert</option>
               <option value="at_port">Im Hafen</option>
@@ -220,7 +231,7 @@ export default function LotDetail() {
           </label>
         </div>
         <div className="text-xs text-slate-500">
-          Bestand je Lager:&nbsp;
+          Bestand je Lager:{' '}
           {balances.length
             ? balances.map(b => `${b.warehouse_name}: ${fmtKg(b.balance_kg)} kg`).join(' · ')
             : '—'}
