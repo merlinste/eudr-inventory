@@ -10,39 +10,55 @@ export default function AuthCallback() {
   const [pw, setPw] = useState('')
 
   useEffect(() => {
-    // 1) Recovery-Event abonnieren (wird bei Recovery-Links emittiert)
+    // Recovery-Event; Supabase feuert das bei Passwort-Links
     const sub = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') setMode('recovery')
     })
 
     ;(async () => {
       try {
-        // 2) PKCE: Auth-Code gegen Session tauschen
-        const code = sp.get('code')
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code)
-          if (error) throw error
-        } else {
-          // 3) Fallback: Implicit-Flow (#access_token / #type=recovery)
-          const hash = new URLSearchParams(window.location.hash.slice(1))
+        const url = new URL(window.location.href)
+        const hash = new URLSearchParams(url.hash.slice(1))
+        const isRecovery =
+          hash.get('type') === 'recovery' || sp.get('type') === 'recovery' || sp.get('recovery') === '1'
+
+        // A) Recovery: KEIN exchangeCodeForSession aufrufen
+        if (isRecovery) {
+          // Falls Tokens im Hash sind, Session herstellen
           const at = hash.get('access_token')
           const rt = hash.get('refresh_token')
           if (at && rt) {
             const { error } = await supabase.auth.setSession({ access_token: at, refresh_token: rt })
             if (error) throw error
           }
-          if (hash.get('type') === 'recovery') setMode('recovery')
+          setMode('recovery')
+          window.history.replaceState({}, document.title, '/auth/callback')
+          return
         }
 
-        // 4) Optionaler Hinweis über Query (wenn du resetPasswordForEmail mit ?recovery=1 schickst)
-        if (sp.get('recovery') === '1') setMode('recovery')
+        // B) OAuth/PKCE: Code nur tauschen, wenn ein PKCE-Verifier existiert
+        const code = sp.get('code')
+        const hasVerifier = typeof window !== 'undefined' && localStorage.getItem('sb-pkce-code-verifier')
+        if (code && hasVerifier) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code)
+          if (error) throw error
+          window.history.replaceState({}, document.title, '/')
+          setMode('done'); nav('/', { replace: true }); return
+        }
 
-        // URL aufräumen
-        window.history.replaceState({}, document.title, '/auth/callback')
+        // C) Implicit-Flow: Tokens im Hash setzen
+        const at2 = hash.get('access_token')
+        const rt2 = hash.get('refresh_token')
+        if (at2 && rt2) {
+          const { error } = await supabase.auth.setSession({ access_token: at2, refresh_token: rt2 })
+          if (error) throw error
+          window.history.replaceState({}, document.title, '/')
+          setMode('done'); nav('/', { replace: true }); return
+        }
 
-        // Falls noch kein Recovery-Modus gesetzt wurde → fertig
-        if (mode === 'loading') setMode('done')
-      } catch (e:any) {
+        // Nichts zu tun → zurück zur App/Login
+        setMode('done'); nav('/', { replace: true })
+      } catch (e: any) {
         setMode('error'); setMsg(e.message ?? String(e))
       }
     })()
@@ -58,7 +74,7 @@ export default function AuthCallback() {
       setMsg('Passwort gesetzt. Bitte neu anmelden.')
       setMode('done')
       setTimeout(() => nav('/login', { replace: true }), 900)
-    } catch (e:any) {
+    } catch (e: any) {
       setMsg(e.message ?? String(e))
     }
   }
