@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabaseClient'
 
 type LotRow = {
   id: string
+  lot_no: string
+  root_lot_no: string
   short_desc: string | null
   origin_country: string | null
   organic: boolean
@@ -93,7 +95,7 @@ export default function Lots() {
   useEffect(() => { void loadAll() }, [])
   async function loadAll() {
     const [lots, wh] = await Promise.all([
-      supabase.from('green_lots').select('id,short_desc,origin_country,organic,species,status,dds_reference,external_contract_no,price_scheme,price_fixed_eur_per_kg,price_fixed_usd_per_lb,price_diff_cents_per_lb,price_base_contract,price_base_month,created_at').order('created_at', { ascending: false }),
+      supabase.from('green_lots').select('id,lot_no,root_lot_no,short_desc,origin_country,organic,species,status,dds_reference,external_contract_no,price_scheme,price_fixed_eur_per_kg,price_fixed_usd_per_lb,price_diff_cents_per_lb,price_base_contract,price_base_month,created_at').order('created_at', { ascending: false }),
       supabase.from('v_my_warehouses').select('id,name').order('name')
     ])
     if (!lots.error) setRows((lots.data ?? []) as LotRow[])
@@ -210,6 +212,7 @@ export default function Lots() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
             <tr>
+              <th className="text-left p-2">Lot‑Nr.</th>
               <th className="text-left p-2">Bezeichnung</th>
               <th className="text-left p-2">Herkunft</th>
               <th className="text-left p-2">Bio</th>
