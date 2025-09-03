@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from 'react-router-dom'
-import UserMenu from '@/components/UserMenu'
+import UserMenu from './UserMenu'
 import logo from '@/assets/earlybird_logo_small.png'
 
 export default function Shell() {
@@ -11,7 +11,9 @@ export default function Shell() {
           <img src={logo} alt="earlybird" className="h-6" />
           <span className="font-semibold">inventory</span>
         </div>
-        <UserMenu />
+        <header className="flex items-center justify-between p-3 border-b">
+  <div className="font-semibold">EUDR Inventory</div>
+  <UserMenu />
       </header>
 
       {/* Sidebar */}
