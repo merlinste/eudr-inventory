@@ -14,6 +14,7 @@ import Eudr from '@/pages/Eudr'
 import Warehouses from '@/pages/Warehouses'
 import Products from '@/pages/Products'
 import AdminUsers from '@/pages/AdminUsers'
+import Account from '@/pages/Account'
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         {/* öffentlich */}
         <Route path="/login" element={<Login />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/account" element={<Account />} />
 
         {/* geschützte App – Shell rendert <Outlet/> */}
         <Route element={<RequireAuth><Shell /></RequireAuth>}>
