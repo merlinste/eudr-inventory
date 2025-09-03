@@ -170,7 +170,7 @@ export default function Productions() {
 
       if (valid.length) {
         const riIns = await supabase.from('run_inputs').insert(
-          valid.map(i => ({ production_run_id: runId, green_lot_id: i.lot_id }))
+          valid.map(i => ({ production_run_id: runId, green_lot_id: i.lot_id, qty_kg: Math.abs(parseFloat(i.kg))}))
         )
         if (riIns.error) throw riIns.error
       }
