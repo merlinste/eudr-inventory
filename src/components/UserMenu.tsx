@@ -2,27 +2,28 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
 export default function UserMenu() {
-  const [email, setEmail] = useState<string | null>(null)
+  const [email, setEmail] = useState<string>('')
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null))
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setEmail(session?.user?.email ?? null)
+    let active = true
+    supabase.auth.getUser().then(({ data }) => {
+      if (active) setEmail(data.user?.email ?? '')
     })
-    return () => { sub.subscription.unsubscribe() }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async () => {
+      const { data } = await supabase.auth.getUser()
+      if (active) setEmail(data.user?.email ?? '')
+    })
+    return () => { active = false; subscription.unsubscribe() }
   }, [])
 
-  if (!email) return null
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="text-slate-600">Angemeldet als <strong>{email}</strong></span>
+      <span className="font-mono">{email || '—'}</span>
       <button
-        className="bg-slate-200 hover:bg-slate-300 rounded px-2 py-1"
-        onClick={async () => {
-          await supabase.auth.signOut()
-          window.location.assign('/login')
-        }}>
-        Logout
+        className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300"
+        onClick={() => supabase.auth.signOut()}
+      >
+        Abmelden
       </button>
     </div>
   )
