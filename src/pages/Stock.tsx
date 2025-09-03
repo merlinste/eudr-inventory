@@ -16,6 +16,8 @@ type Lot = {
 
 type Row = {
   lot_id: string
+  lot_no: string
+  root_lot_no: string
   short_desc: string | null
   origin_country: string | null
   organic: boolean
@@ -50,7 +52,7 @@ export default function Stock () {
   async function loadRows () {
     // v_green_stock_detailed liefert je Lot die Summen + Lagerverteilung
     const r = await supabase.from('v_green_stock_detailed')
-      .select('lot_id, short_desc, origin_country, organic, status, received_kg, produced_kg, balances, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb, price_base_contract')
+      .select('lot_id, lot_no, root_lot_no, short_desc, origin_country, organic, status, received_kg, produced_kg, balances, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb, price_base_contract')
       .order('short_desc', { ascending: true })
     if (!r.error) setRows((r.data ?? []) as Row[])
   }
@@ -167,6 +169,7 @@ export default function Stock () {
               const remain = r.received_kg - r.produced_kg
               return (
                 <tr key={r.lot_id} className="border-t">
+                  <td className="p-2"><span className="font-mono">{r.lot_no}</span>{' — '}{r.short_desc ?? '—'}</td>
                   <td className="p-2">{r.short_desc ?? '—'}</td>
                   <td className="p-2">{r.origin_country ?? '—'}</td>
                   <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
