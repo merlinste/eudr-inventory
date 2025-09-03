@@ -22,11 +22,12 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   }
 }
 
-export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+export const supabase = createClient(import.meta.env.VITE_SUPABASE_URL!, import.meta.env.VITE_SUPABASE_ANON_KEY!, {
   auth: {
-    flowType: 'pkce',
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true, // wichtig für Azure-Redirect
+    detectSessionInUrl: true, // Hash/Query beim Laden parsen
+    flowType: 'pkce',
   },
 })
+
