@@ -1,51 +1,49 @@
-import { useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
 
 export default function AuthCallback() {
   const nav = useNavigate()
-  const [sp] = useSearchParams()
+  const loc = useLocation()
+  const [msg, setMsg] = useState('Authentifiziere…')
 
   useEffect(() => {
-    const next = sp.get('next') || '/inventory'
-    const code = sp.get('code')
+    (async () => {
+      try {
+        const url = new URL(window.location.href)
+        const next = url.searchParams.get('next') || '/'
+        const code = url.searchParams.get('code')
 
-    // 1) PKCE (?code=...)
-    if (code) {
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-        if (error) nav('/login?error=callback_failed', { replace: true })
-        else nav(next, { replace: true })
-      })
-      return
-    }
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code)
+          if (error) throw error
+          // URL aufräumen (ohne code)
+          window.history.replaceState({}, document.title, next)
+          nav(next, { replace: true })
+          return
+        }
 
-    // 2) Implicit-Fragment (#access_token=...); Fehler ggf. aus Hash auslesen
-    const hash = window.location.hash?.slice(1) || ''
-    const hp = new URLSearchParams(hash)
+        // Fallback: Magic‑Link (Fragment) -> setSession (selten, aber nett)
+        if (window.location.hash.includes('access_token=')) {
+          const h = new URLSearchParams(window.location.hash.slice(1))
+          const access_token = h.get('access_token')
+          const refresh_token = h.get('refresh_token')
+          if (access_token && refresh_token) {
+            const { error } = await supabase.auth.setSession({ access_token, refresh_token })
+            if (error) throw error
+            window.history.replaceState({}, document.title, next)
+            nav(next, { replace: true })
+            return
+          }
+        }
 
-    // Fehler, die Supabase im Hash liefern kann (siehe Redirect-URLs-Doku)
-    const errCode = hp.get('error_code')
-    const errDesc = hp.get('error_description')
-    if (errCode) {
-      console.error('OAuth error', errCode, errDesc)
-      nav(`/login?error=${encodeURIComponent(errCode)}`, { replace: true })
-      return
-    }
+        throw new Error('Kein Auth‑Code gefunden.')
+      } catch (e: any) {
+        console.error(e)
+        setMsg(`Login-Callback fehlgeschlagen: ${e.message ?? e}`)
+      }
+    })()
+  }, [nav])
 
-    const access_token = hp.get('access_token')
-    const refresh_token = hp.get('refresh_token')
-
-    if (access_token && refresh_token) {
-      supabase.auth.setSession({ access_token, refresh_token }).then(({ error }) => {
-        if (error) nav('/login?error=callback_failed', { replace: true })
-        else nav(next, { replace: true })
-      })
-      return
-    }
-
-    // 3) Nichts da -> zurück zum Login
-    nav('/login?error=missing_params', { replace: true })
-  }, [nav, sp])
-
-  return <div className="p-6">Anmeldung wird abgeschlossen…</div>
+  return <div className="p-6 text-sm">{msg}</div>
 }
