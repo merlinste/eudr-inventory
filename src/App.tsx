@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import Shell from '@/components/Shell'
-
+import AuthCallback from '@/pages/AuthCallback'
 import Login from '@/pages/Login'
 import Stock from '@/pages/Stock'
 import Lots from '@/pages/Lots'
@@ -19,6 +19,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
         <Route element={<RequireAuth><Shell /></RequireAuth>}>
           <Route index element={<Navigate to="/stock" replace />} />
           <Route path="/stock" element={<Stock />} />
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/admin/users" element={<AdminUsers />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/login" element={<Login />} />
       </Routes>
     </BrowserRouter>
   )
