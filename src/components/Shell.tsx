@@ -11,9 +11,7 @@ export default function Shell() {
           <img src={logo} alt="earlybird" className="h-6" />
           <span className="font-semibold">inventory</span>
         </div>
-        <header className="flex items-center justify-between p-3 border-b">
-  <div className="font-semibold">EUDR Inventory</div>
-  <UserMenu />
+          <UserMenu />
       </header>
 
       {/* Sidebar */}
