@@ -1,80 +1,114 @@
-import { FormEvent, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
-import logoUrl from '@/assets/earlybird-logo.png'
 
 export default function Login() {
+  const nav = useNavigate()
+  const loc = useLocation()
+  const [mode, setMode] = useState<'login'|'signup'|'reset'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
-  async function signInPassword(e: FormEvent) {
-    e.preventDefault()
-    setBusy(true); setError(null)
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError(error.message)
-    setBusy(false)
+  // Wenn bereits eingeloggt, direkt ins App-Home
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) nav('/', { replace: true })
+    })
+  }, [nav])
+
+  const next = (loc.state as any)?.from || '/'
+
+  async function handleLogin() {
+    setLoading(true); setMessage(null)
+    const { error } = await supabase.auth.signInWithPassword({ email, password }) // E-Mail/Passwort-Login
+    setLoading(false)
+    if (error) setMessage(error.message)
+    else nav(next, { replace: true })
   }
 
-  async function signInAzure() {
-    setBusy(true); setError(null)
-    const origin = window.location.origin
-    const next = '/inventory'
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'azure',
-      options: {
-        scopes: 'email',
-        redirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`
-      }
+  async function handleSignup() {
+    setLoading(true); setMessage(null)
+    const { error } = await supabase.auth.signUp({
+      email, password,
+      options: { emailRedirectTo: `${origin}/auth/callback` } // Link führt zurück in die App
     })
-    if (error) setError(error.message)
-    setBusy(false)
+    setLoading(false)
+    if (error) setMessage(error.message)
+    else setMessage('Bitte E‑Mail prüfen und Registrierung bestätigen.')
+  }
+
+  async function handleReset() {
+    setLoading(true); setMessage(null)
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${origin}/auth/callback` // dort neues Passwort setzen
+    })
+    setLoading(false)
+    if (error) setMessage(error.message)
+    else setMessage('Wenn die E‑Mail existiert, wurde ein Reset‑Link gesendet.')
   }
 
   return (
-    <div className="min-h-full flex items-center justify-center p-6">
-      <div className="w-full max-w-sm space-y-4">
-        <div className="flex justify-center">
-          <img src={logoUrl} alt="earlybird coffee" className="h-10 w-auto" />
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="w-full max-w-md border rounded p-6 space-y-4">
+        <h1 className="text-xl font-semibold text-center">Anmelden</h1>
+
+        <div className="space-y-3">
+          <label className="block text-sm">E‑Mail
+            <input
+              className="mt-1 w-full border rounded px-3 py-2"
+              type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="email" />
+          </label>
+
+          {mode !== 'reset' && (
+            <label className="block text-sm">Passwort
+              <input
+                className="mt-1 w-full border rounded px-3 py-2"
+                type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete={mode==='signup'?'new-password':'current-password'} />
+            </label>
+          )}
+
+          {message && <div className="text-sm text-red-600">{message}</div>}
+
+          {mode === 'login' && (
+            <>
+              <button onClick={handleLogin} disabled={loading}
+                className="w-full bg-slate-900 text-white rounded py-2">
+                {loading ? 'Bitte warten…' : 'Einloggen'}
+              </button>
+              <div className="flex justify-between text-sm">
+                <button className="underline" onClick={()=>setMode('reset')}>Passwort vergessen?</button>
+                <button className="underline" onClick={()=>setMode('signup')}>Konto erstellen</button>
+              </div>
+            </>
+          )}
+
+          {mode === 'signup' && (
+            <>
+              <button onClick={handleSignup} disabled={loading}
+                className="w-full bg-slate-900 text-white rounded py-2">
+                {loading ? 'Bitte warten…' : 'Registrieren'}
+              </button>
+              <div className="flex justify-between text-sm">
+                <button className="underline" onClick={()=>setMode('login')}>Schon ein Konto? Einloggen</button>
+              </div>
+            </>
+          )}
+
+          {mode === 'reset' && (
+            <>
+              <button onClick={handleReset} disabled={loading}
+                className="w-full bg-slate-900 text-white rounded py-2">
+                {loading ? 'Bitte warten…' : 'Reset‑Link anfordern'}
+              </button>
+              <div className="flex justify-between text-sm">
+                <button className="underline" onClick={()=>setMode('login')}>Zurück zum Login</button>
+              </div>
+            </>
+          )}
         </div>
-        <h1 className="text-xl text-center">Anmeldung</h1>
-
-        <button
-          onClick={signInAzure}
-          className="w-full rounded bg-black/80 text-white py-2"
-          disabled={busy}
-        >
-          Mit Microsoft anmelden
-        </button>
-
-        <div className="text-center text-sm text-slate-500">oder</div>
-
-        <form onSubmit={signInPassword} className="space-y-2">
-          <input
-            className="w-full border rounded px-3 py-2"
-            placeholder="E-Mail"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <input
-            className="w-full border rounded px-3 py-2"
-            placeholder="Passwort"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-          <button
-            className="w-full rounded bg-slate-800 text-white py-2"
-            disabled={busy}
-          >
-            Login
-          </button>
-        </form>
-
-        {error && <div className="text-red-600 text-sm">{error}</div>}
       </div>
     </div>
   )
