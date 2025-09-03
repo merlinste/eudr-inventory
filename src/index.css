@@ -1,7 +1,8 @@
+/* src/index.css */
+@import 'leaflet/dist/leaflet.css';  /* MUSS an erster Stelle stehen */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-@import 'leaflet/dist/leaflet.css';
-.leaflet-container { height: 420px; }
 
-html, body, #root { height: 100%; }
+/* falls du eine Höhe global definieren willst: */
+.leaflet-container { height: 420px; }
