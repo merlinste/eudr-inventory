@@ -2,14 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 type Prices = {
-  usd_eur: number | null;         // USD -> EUR (z.B. 0.8589)
-  kc_usd_per_lb: number | null;   // Arabica (ICE KC), USD/lb
-  rc_usd_per_ton: number | null;  // Robusta (ICE RC), USD/metric ton
+  usd_eur: number | null;        // USD -> EUR
+  kc_usd_per_lb: number | null;  // Arabica (KC) USD/lb
+  rc_usd_per_ton: number | null; // Robusta (RC) USD/ton
 };
 
 type StockRow = {
   id: string;
-  org_id?: string;
   short_desc: string | null;
   origin_country: string | null;
   organic: boolean | null;
@@ -17,6 +16,8 @@ type StockRow = {
   received_kg: number;
   produced_kg: number;
   balance_kg: number;
+  // org_id kann vorhanden sein, muss aber nicht
+  org_id?: string | null;
 };
 
 type WhRow = {
@@ -24,6 +25,7 @@ type WhRow = {
   warehouse_id: string | null;
   warehouse_name: string | null;
   balance_kg: number;
+  org_id?: string | null;
 };
 
 type LotPrice = {
@@ -53,66 +55,69 @@ export default function Stock() {
       const { data: auth } = await supabase.auth.getUser();
       const uid = auth.user?.id;
       if (!uid) return;
-
       const prof = await supabase.from('profiles').select('org_id').eq('user_id', uid).single();
       if (!prof.error) setOrgId(prof.data?.org_id ?? null);
     })();
   }, []);
 
-  // 2) Daten laden (mit Fallback, wenn die Views keine org_id-Spalte haben)
+  // 2) Daten laden (getrennte Abfragen; Fallback ohne org_id)
   useEffect(() => {
     (async () => {
       setLoading(true);
 
       // --- v_green_stock
-      const selectColsWithOrg =
+      const colsWithOrg =
         'id, org_id, short_desc, origin_country, organic, status, received_kg, produced_kg, balance_kg';
-      const selectColsNoOrg =
+      const colsNoOrg =
         'id, short_desc, origin_country, organic, status, received_kg, produced_kg, balance_kg';
 
-      let stockRes = await supabase
+      const tryWithOrg = await supabase
         .from('v_green_stock')
-        .select(selectColsWithOrg)
+        .select(colsWithOrg)
         .order('short_desc', { ascending: true });
 
-      // Falls Spalte org_id nicht existiert, neu ohne org_id laden
-      if (stockRes.error && /org_id/i.test(stockRes.error.message || '')) {
-        stockRes = await supabase
+      let stockData: any[] = [];
+      if (tryWithOrg.error && /org_id|column .* does not exist/i.test(tryWithOrg.error.message || '')) {
+        const tryNoOrg = await supabase
           .from('v_green_stock')
-          .select(selectColsNoOrg)
+          .select(colsNoOrg)
           .order('short_desc', { ascending: true });
-      } else if (!stockRes.error && orgId) {
-        // Wenn org_id existiert, clientseitig filtern (zur Sicherheit; RLS filtert ohnehin)
-        stockRes.data = (stockRes.data ?? []).filter((r: any) => r.org_id === orgId);
+        if (!tryNoOrg.error) stockData = tryNoOrg.data ?? [];
+      } else if (!tryWithOrg.error) {
+        stockData = tryWithOrg.data ?? [];
+        if (orgId) stockData = stockData.filter((r: any) => r.org_id === orgId);
       }
 
       // --- v_green_stock_detailed
-      const whWithOrg = 'green_lot_id, warehouse_id, warehouse_name, balance_kg, org_id';
-      const whNoOrg = 'green_lot_id, warehouse_id, warehouse_name, balance_kg';
+      const whColsWithOrg = 'green_lot_id, warehouse_id, warehouse_name, balance_kg, org_id';
+      const whColsNoOrg = 'green_lot_id, warehouse_id, warehouse_name, balance_kg';
 
-      let whRes = await supabase
+      const whWithOrg = await supabase
         .from('v_green_stock_detailed')
-        .select(whWithOrg)
+        .select(whColsWithOrg)
         .order('warehouse_name', { ascending: true });
 
-      if (whRes.error && /org_id/i.test(whRes.error.message || '')) {
-        whRes = await supabase
+      let whData: any[] = [];
+      if (whWithOrg.error && /org_id|column .* does not exist/i.test(whWithOrg.error.message || '')) {
+        const whNoOrg = await supabase
           .from('v_green_stock_detailed')
-          .select(whNoOrg)
+          .select(whColsNoOrg)
           .order('warehouse_name', { ascending: true });
-      } else if (!whRes.error && orgId) {
-        whRes.data = (whRes.data ?? []).filter((r: any) => (r as any).org_id === orgId);
+        if (!whNoOrg.error) whData = whNoOrg.data ?? [];
+      } else if (!whWithOrg.error) {
+        whData = whWithOrg.data ?? [];
+        if (orgId) whData = whData.filter((r: any) => r.org_id === orgId);
       }
 
-      // --- Preisfelder direkt aus green_lots ziehen und nach id mappen
+      // --- Preise direkt aus green_lots
       const priceRes = await supabase
         .from('green_lots')
         .select(
           'id, species, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb, price_base_contract'
         );
 
-      if (!stockRes.error) setRows((stockRes.data ?? []) as StockRow[]);
-      if (!whRes.error) setWh((whRes.data ?? []) as WhRow[]);
+      setRows((stockData ?? []) as StockRow[]);
+      setWh((whData ?? []) as WhRow[]);
       if (!priceRes.error) {
         const mp: Record<string, LotPrice> = {};
         for (const r of (priceRes.data ?? []) as any[]) {
@@ -120,9 +125,9 @@ export default function Stock() {
             id: r.id,
             species: r.species ?? null,
             price_scheme: r.price_scheme ?? null,
-            price_fixed_eur_per_kg: numOrNull(r.price_fixed_eur_per_kg),
-            price_fixed_usd_per_lb: numOrNull(r.price_fixed_usd_per_lb),
-            price_diff_cents_per_lb: numOrNull(r.price_diff_cents_per_lb),
+            price_fixed_eur_per_kg: toNum(r.price_fixed_eur_per_kg),
+            price_fixed_usd_per_lb: toNum(r.price_fixed_usd_per_lb),
+            price_diff_cents_per_lb: toNum(r.price_diff_cents_per_lb),
             price_base_contract: r.price_base_contract ?? null,
           };
         }
@@ -133,23 +138,22 @@ export default function Stock() {
     })();
   }, [orgId]);
 
-  // 3) Preise laden (Proxy-Funktion)
+  // 3) Preise via Proxy
   async function refreshPrices() {
     try {
       const res = await fetch('/.netlify/functions/prices', { method: 'GET' });
-      if (!res.ok) throw new Error('Price proxy error');
       const j = await res.json();
       setPrices({
-        usd_eur: numOrNull(j?.usd_eur),
-        kc_usd_per_lb: numOrNull(j?.kc_usd_per_lb),
-        rc_usd_per_ton: numOrNull(j?.rc_usd_per_ton),
+        usd_eur: toNum(j?.usd_eur),
+        kc_usd_per_lb: toNum(j?.kc_usd_per_lb),
+        rc_usd_per_ton: toNum(j?.rc_usd_per_ton),
       });
     } catch {
       setPrices({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
     }
   }
 
-  // 4) aufbereitete Ansicht
+  // 4) Darstellung
   const whByLot = useMemo(() => {
     const m = new Map<string, WhRow[]>();
     for (const r of wh) {
@@ -161,9 +165,8 @@ export default function Stock() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const base = rows;
-    if (!q) return base;
-    return base.filter((r) => {
+    if (!q) return rows;
+    return rows.filter((r) => {
       const s = (r.short_desc ?? '') + ' ' + (r.origin_country ?? '') + ' ' + (r.status ?? '');
       return s.toLowerCase().includes(q);
     });
@@ -186,8 +189,8 @@ export default function Stock() {
       </div>
 
       <div className="text-xs text-slate-500">
-        FX USD→EUR: {fmtMaybe(prices.usd_eur, 4, '—')} · KC (USD/lb): {fmtMaybe(prices.kc_usd_per_lb, 4, '—')} · RC
-        (USD/t): {fmtMaybe(prices.rc_usd_per_ton, 0, '—')}
+        FX USD→EUR: {fmtMaybe(prices.usd_eur, 4, '—')} · KC (USD/lb): {fmtMaybe(prices.kc_usd_per_lb, 4, '—')} · RC (USD/t):{' '}
+        {fmtMaybe(prices.rc_usd_per_ton, 0, '—')}
       </div>
 
       <div className="overflow-x-auto border rounded">
@@ -259,8 +262,8 @@ export default function Stock() {
 
 /* ---------- helpers ---------- */
 
-function numOrNull(x: any): number | null {
-  const n = typeof x === 'string' ? Number(x) : x;
+function toNum(v: any): number | null {
+  const n = typeof v === 'string' ? Number(v) : v;
   return Number.isFinite(n) ? Number(n) : null;
 }
 
@@ -293,19 +296,11 @@ function mapStatus(s: string | null) {
   }
 }
 
-/**
- * Preisberechnung in EUR/kg:
- * - fixed_eur: nimmt price_fixed_eur_per_kg
- * - fixed_usd: USD/lb -> EUR/kg (USD→EUR via usd_eur)
- * - differential: KC + Diff (c/lb) -> USD/lb, danach EUR/kg
- * - RC (Robusta): USD/ton -> EUR/kg; Differential (falls c/lb gesetzt) wird optional addiert
- */
 function computeEurPerKg(lp: LotPrice | undefined, px: Prices): string | null {
   if (!lp || !lp.price_scheme) return null;
 
-  // Sicherheiten:
-  const usdToEur = px.usd_eur ?? null;
   const LB_PER_KG = 2.2046226218;
+  const usdToEur = px.usd_eur ?? null;
 
   let eurPerKg: number | null = null;
 
@@ -320,15 +315,13 @@ function computeEurPerKg(lp: LotPrice | undefined, px: Prices): string | null {
 
   if (lp.price_scheme === 'differential') {
     if ((lp.price_base_contract ?? 'kc') === 'kc') {
-      // Arabica: KC (USD/lb) + Diff (c/lb)
       if (px.kc_usd_per_lb != null && usdToEur != null) {
-        const diffUsdPerLb = (lp.price_diff_cents_per_lb ?? 0) / 100; // c/lb -> USD/lb
+        const diffUsdPerLb = (lp.price_diff_cents_per_lb ?? 0) / 100;
         const usdPerLb = px.kc_usd_per_lb + diffUsdPerLb;
         const eurPerLb = usdPerLb * usdToEur;
         eurPerKg = eurPerLb * LB_PER_KG;
       }
     } else if (lp.price_base_contract === 'rc') {
-      // Robusta: RC (USD/t) (+ optional diff in c/lb, wenn gesetzt – konservativ ignorieren)
       if (px.rc_usd_per_ton != null && usdToEur != null) {
         const eurPerTon = px.rc_usd_per_ton * usdToEur;
         eurPerKg = eurPerTon / 1000;
@@ -337,6 +330,5 @@ function computeEurPerKg(lp: LotPrice | undefined, px: Prices): string | null {
   }
 
   if (eurPerKg == null || !Number.isFinite(eurPerKg)) return null;
-  // Anzeige mit 2 Dezimalstellen, Kommaformat:
   return new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(eurPerKg);
 }
