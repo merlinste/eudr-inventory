@@ -159,6 +159,7 @@ export default function Productions() {
 
       if (productId || batchCode || mhdText) {
         const fbIns = await supabase.from('finished_batches').insert([{
+          org_id: orgId,
           production_run_id: runId,
           product_id: productId || null,
           batch_code: batchCode || null,
