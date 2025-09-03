@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabaseClient'
 
 type Run = { id: string; created_at: string | null; run_date: string | null; happened_at: string | null }
 type Warehouse = { id: string; name: string; w_type: string }
-type Lot = { id: string; short_desc: string | null }
+type Lot = { id: string; lot_no: string; short_desc: string | null }
 type Product = { id: string; name: string }
 type Variant = {
   id: string; product_id: string;
@@ -89,7 +89,7 @@ export default function Productions() {
     const [wh, ws, gl, p, v] = await Promise.all([
       supabase.from('v_my_warehouses').select('id,name,w_type').order('name'),
       supabase.rpc('rpc_green_balance_per_warehouse'),
-      supabase.from('green_lots').select('id,short_desc').order('created_at', { ascending: false }),
+      supabase.from('green_lots').select('id,lot_no,short_desc').order('created_at', { ascending: false }),
       supabase.from('products').select('id,name').order('name'),
       supabase.from('product_variants').select('id,product_id,packaging_type,net_weight_g,capsules_per_pack,grams_per_capsule')
     ])
@@ -315,7 +315,7 @@ export default function Productions() {
                         value={row.lot_id}
                         onChange={e=>updateInput(idx, { lot_id: e.target.value })}>
                   <option value="">- waehlen -</option>
-                  {lots.map(l => <option key={l.id} value={l.id}>{l.short_desc ?? l.id}</option>)}
+                  {lots.map(l => <option key={l.id} value={l.id}>{l.lot_no} - {l.short_desc ?? l.id}</option>)}
                 </select>
               </label>
               <label>Menge (kg)
