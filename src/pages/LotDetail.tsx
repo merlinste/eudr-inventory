@@ -6,6 +6,12 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { Feature, FeatureCollection, Geometry, GeoJsonObject } from 'geojson'
 
+<div className="text-sm text-slate-600">
+  <span className="font-medium">Lot‑Nr.:</span> <span className="font-mono">{lot.lot_no}</span>
+  {' · '}
+  <span className="font-medium">Ursprung:</span> <span className="font-mono">{lot.root_lot_no}</span>
+</div>
+
 type Lot = {
   id: string
   short_desc: string | null
