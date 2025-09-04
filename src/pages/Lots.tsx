@@ -48,19 +48,28 @@ const COUNTRIES = [
   'Papua New Guinea','Bolivia','Yemen','China','Dominican Republic','Congo',"Cote d'Ivoire"
 ]
 
-// KC: Mar, May, Jul, Sep, Dec.  RC: Jan, Mar, May, Jul, Sep, Nov. (ICE contract months)
-function futuresMonths(contract: 'KC'|'RC', count = 18): string[] {
-  const allowed = contract === 'KC' ? [3,5,7,9,12] : [1,3,5,7,9,11]
-  const out: string[] = []
-  const d = new Date()
-  d.setDate(1)
-  for (let i = 0; out.length < count && i < 60; i++) {
-    const y = d.getFullYear()
-    const m = d.getMonth() + 1
-    if (allowed.includes(m)) out.push(`${y}-${String(m).padStart(2, '0')}`)
-    d.setMonth(d.getMonth() + 1)
+// helper/contractMonths.ts
+export type ContractChoice = { code: string; label: string; monthDate: string }; // YYYY-MM-01
+
+const monthCode = (m: number) => ['','F','G','H','J','K','M','N','Q','U','V','X','Z'][m]; // 1..12
+const allowed = {
+  kc: [3,5,7,9,12],          // H K N U Z
+  rc: [1,3,5,7,9,11],        // F H K N U X
+};
+
+export function nextContracts(base: 'kc'|'rc', count = 8): ContractChoice[] {
+  const today = new Date();
+  let y = today.getUTCFullYear(), m = today.getUTCMonth()+1;
+  const out: ContractChoice[] = [];
+  while (out.length < count) {
+    m++;
+    if (m > 12) { m = 1; y++; }
+    if (!allowed[base].includes(m)) continue;
+    const code = (base === 'kc' ? 'KC' : 'RC') + monthCode(m) + String(y).slice(-1);
+    const label = `${String(m).padStart(2,'0')}/${y} (${code})`;
+    out.push({ code, label, monthDate: `${y}-${String(m).padStart(2,'0')}-01` });
   }
-  return out
+  return out;
 }
 
 export default function Lots() {
