@@ -1,50 +1,53 @@
 // netlify/functions/prices.ts
-import type { Handler } from '@netlify/functions';
+import type { Handler } from '@netlify/functions'
 
-type NDLRow = { column_names: string[]; data: any[][] };
-const ndl = async (code: string, key: string) => {
-  const url = `https://data.nasdaq.com/api/v3/datasets/${code}.json?rows=1&api_key=${encodeURIComponent(key)}`;
-  const r = await fetch(url, { headers: { 'Accept': 'application/json' }});
-  if (!r.ok) throw new Error(`NDL ${code} ${r.status}`);
-  const j = await r.json() as { dataset: { column_names: string[], data: any[][] } };
-  const cols = j.dataset.column_names;
-  const row = j.dataset.data?.[0] || [];
-  const get = (name: string) => {
-    const idx = cols.indexOf(name);
-    return idx >= 0 ? Number(row[idx]) : null;
-  };
-  // vorzugsweise 'Settle', fallback 'Last'
-  return get('Settle') ?? get('Last') ?? null;
-};
-
-const fx = async () => {
-  const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=EUR', { headers: { 'Accept': 'application/json' }});
-  if (!r.ok) throw new Error(`FX ${r.status}`);
-  const j = await r.json() as { rates: { EUR: number } };
-  return Number(j?.rates?.EUR ?? 0) || null;
-};
+const YF_URL = 'https://query2.finance.yahoo.com/v7/finance/quote'
 
 export const handler: Handler = async () => {
   try {
-    const key = process.env.NDL_API_KEY || '';
-    if (!key) throw new Error('NDL_API_KEY missing');
+    const symbols = ['KC=F', 'EURUSD=X'] // Arabica Front‑Month & EURUSD
+    const url = `${YF_URL}?symbols=${encodeURIComponent(symbols.join(','))}`
 
-    const [usd_eur, kc, rc] = await Promise.all([
-      fx(),
-      ndl('CHRIS/ICE_KC1', key), // USD per lb
-      ndl('CHRIS/ICE_RC1', key), // USD per metric ton
-    ]);
+    // User-Agent hilft gegen gelegentliche 403
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+    if (!res.ok) {
+      return {
+        statusCode: 200,
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({
+          usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null,
+          error: `Yahoo response ${res.status}`,
+        }),
+      }
+    }
+    const data = await res.json()
+    const list: any[] = data?.quoteResponse?.result ?? []
+
+    const get = (sym: string) =>
+      list.find(r => r?.symbol === sym)?.regularMarketPrice ?? null
+
+    const kc = get('KC=F')                // USD/lb
+    const eurusd = get('EURUSD=X')        // USD per 1 EUR
+    const usd_eur = eurusd ? (1 / eurusd) : null
 
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      headers: { 'Access-Control-Allow-Origin': '*' },
       body: JSON.stringify({
-        usd_eur: usd_eur,              // number | null (USD→EUR)
-        kc_usd_per_lb: kc,            // Arabica
-        rc_usd_per_ton: rc            // Robusta
+        kc_usd_per_lb: kc ?? null,
+        usd_eur,
+        rc_usd_per_ton: null,         // Robusta später
+        asof: new Date().toISOString()
       }),
-    };
+    }
   } catch (e: any) {
-    return { statusCode: 500, body: JSON.stringify({ error: e.message ?? String(e) }) };
+    return {
+      statusCode: 200,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({
+        usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null,
+        error: String(e),
+      }),
+    }
   }
-};
+}
