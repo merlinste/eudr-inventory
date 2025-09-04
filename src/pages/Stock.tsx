@@ -29,7 +29,7 @@ type LotPrice = {
   price_fixed_eur_per_kg: number|null;
   price_fixed_usd_per_lb: number|null;
   price_diff_cents_per_lb: number|null;
-  price_diff_usd_per_ton: number|null;   // <— wichtig
+  price_diff_usd_per_ton?: number|null;   // <— wichtig
   price_base_contract: 'kc'|'rc'|null;
 };
 
