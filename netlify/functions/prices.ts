@@ -1,53 +1,48 @@
-// netlify/functions/prices.ts
-import type { Handler } from '@netlify/functions'
+import type { Handler } from '@netlify/functions';
 
-const YF_URL = 'https://query2.finance.yahoo.com/v7/finance/quote'
+// Yahoo Chart API (liefert JSON; "regularMarketPrice" in meta)
+const CHART = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+
+// Hole den letzten Kurs (z. B. KC=F oder EURUSD=X)
+async function yahooLast(symbol: string): Promise<number | null> {
+  const url = `${CHART}${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const res = j?.chart?.result?.[0];
+  const price =
+    res?.meta?.regularMarketPrice ??
+    res?.indicators?.quote?.[0]?.close?.at(-1);
+  return typeof price === 'number' ? price : null;
+}
 
 export const handler: Handler = async () => {
   try {
-    const symbols = ['KC=F', 'EURUSD=X'] // Arabica Front‑Month & EURUSD
-    const url = `${YF_URL}?symbols=${encodeURIComponent(symbols.join(','))}`
+    const [kcCentsPerLb, eurUsd] = await Promise.all([
+      yahooLast('KC=F'),     // ICE Arabica (in c/lb)
+      yahooLast('EURUSD=X'), // USD pro EUR
+    ]);
 
-    // User-Agent hilft gegen gelegentliche 403
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
-    if (!res.ok) {
-      return {
-        statusCode: 200,
-        headers: { 'Access-Control-Allow-Origin': '*' },
-        body: JSON.stringify({
-          usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null,
-          error: `Yahoo response ${res.status}`,
-        }),
-      }
-    }
-    const data = await res.json()
-    const list: any[] = data?.quoteResponse?.result ?? []
+    // USD->EUR = 1 / (USD pro EUR)
+    const usd_eur =
+      typeof eurUsd === 'number' && eurUsd > 0 ? 1 / eurUsd : null;
 
-    const get = (sym: string) =>
-      list.find(r => r?.symbol === sym)?.regularMarketPrice ?? null
-
-    const kc = get('KC=F')                // USD/lb
-    const eurusd = get('EURUSD=X')        // USD per 1 EUR
-    const usd_eur = eurusd ? (1 / eurusd) : null
+    // KC=F kommt in "cents per lb" → USD/lb
+    const kc_usd_per_lb =
+      typeof kcCentsPerLb === 'number' ? kcCentsPerLb / 100 : null;
 
     return {
       statusCode: 200,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({
-        kc_usd_per_lb: kc ?? null,
-        usd_eur,
-        rc_usd_per_ton: null,         // Robusta später
-        asof: new Date().toISOString()
-      }),
-    }
-  } catch (e: any) {
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'public, max-age=300',
+      },
+      body: JSON.stringify({ usd_eur, kc_usd_per_lb /* rc_usd_per_ton: null */ }),
+    };
+  } catch {
     return {
       statusCode: 200,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({
-        usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null,
-        error: String(e),
-      }),
-    }
+      body: JSON.stringify({ usd_eur: null, kc_usd_per_lb: null }),
+    };
   }
-}
+};
