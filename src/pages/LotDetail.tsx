@@ -1,4 +1,5 @@
 // src/pages/LotDetail.tsx
+import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
@@ -18,18 +19,16 @@ type Lot = {
   price_base_contract: 'kc'|'rc'|null;
   price_fixed_eur_per_kg: number|null;
   price_fixed_usd_per_lb: number|null;
-  price_diff_cents_per_lb: number|null; // für KC
-  price_diff_usd_per_ton: number|null;  // für RC
+  price_diff_cents_per_lb: number|null;   // KC
+  price_diff_usd_per_ton: number|null;    // RC
   price_fixed_at: string|null;
 };
 
 type Wh = { id: string; name: string };
 type WhBalance = { warehouse_id: string; warehouse_name: string; balance_kg: number };
-
 type Prices = { usd_eur: number|null; kc_usd_per_lb: number|null; rc_usd_per_ton: number|null };
 
 const LB_PER_KG = 2.2046226218;
-const LB_PER_TON = 2204.6226218;
 
 export default function LotDetail() {
   const { id } = useParams();
@@ -48,15 +47,15 @@ export default function LotDetail() {
   const [base, setBase] = useState<Lot['price_base_contract']>('kc');
   const [fixEurKg, setFixEurKg] = useState<string>('');
   const [fixUsdLb, setFixUsdLb] = useState<string>('');
-  const [diffCLb, setDiffCLb] = useState<string>('');      // KC Diff (c/lb)
-  const [diffUsdTon, setDiffUsdTon] = useState<string>(''); // RC Diff (USD/t)
+  const [diffCLb, setDiffCLb] = useState<string>('');       // c/lb (KC)
+  const [diffUsdTon, setDiffUsdTon] = useState<string>(''); // USD/t (RC)
   const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
 
   // Lager & Bestände
   const [warehouses, setWarehouses] = useState<Wh[]>([]);
   const [balances, setBalances] = useState<WhBalance[]>([]);
 
-  // Aufteilen / Umlagern
+  // Aufteilen & Umlagern
   const [srcWh, setSrcWh] = useState('');
   const [dstWh, setDstWh] = useState('');
   const [moveKg, setMoveKg] = useState('');
@@ -117,7 +116,7 @@ export default function LotDetail() {
 
     initMapOnce();
     await loadGeoJSON(lotId);
-    await refreshPrices(); // für Preview
+    await refreshPrices(); // für Preis-Preview
   }
 
   function initMapOnce() {
@@ -162,14 +161,31 @@ export default function LotDetail() {
     } catch {}
   }
 
+  async function onGeoJSONFile(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!id) return;
+    const f = e.target.files?.[0]; if (!f) return;
+    try {
+      const txt = await f.text();
+      const parsed = JSON.parse(txt);
+      const res = await supabase.rpc('import_lot_geojson', { p_lot_id: id, p_geojson: parsed });
+      if (res.error) throw res.error;
+      await loadGeoJSON(id);
+      alert(`${res.data ?? 0} Feature(s) importiert.`);
+    } catch (err: any) {
+      alert(err.message ?? String(err));
+    } finally {
+      e.target.value = '';
+    }
+  }
+
   async function refreshPrices() {
     try {
       const r = await fetch('/.netlify/functions/prices');
       const j = await r.json();
       setPrices({
-        usd_eur: isFiniteNumber(j?.usd_eur) ? Number(j.usd_eur) : null,
-        kc_usd_per_lb: isFiniteNumber(j?.kc_usd_per_lb) ? Number(j.kc_usd_per_lb) : null,
-        rc_usd_per_ton: isFiniteNumber(j?.rc_usd_per_ton) ? Number(j.rc_usd_per_ton) : null,
+        usd_eur: finite(j?.usd_eur),
+        kc_usd_per_lb: finite(j?.kc_usd_per_lb),
+        rc_usd_per_ton: finite(j?.rc_usd_per_ton),
       });
     } catch {
       setPrices({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
@@ -195,10 +211,10 @@ export default function LotDetail() {
     if (upd.error) alert(upd.error.message); else alert('Gespeichert.');
   }
 
-  // „Festschreiben“-Button: aktuellen Marktpreis in EUR/kg übernehmen
+  // „Festschreiben“: berechne EUR/kg als Zahl und speichere als fixierten EUR-Preis
   async function freezeCurrentPrice() {
     if (!id) return;
-    const preview = computeEurPerKg({
+    const value = computeEurPerKgRaw({
       price_scheme: 'differential',
       price_base_contract: base || 'kc',
       price_fixed_eur_per_kg: null,
@@ -207,12 +223,11 @@ export default function LotDetail() {
       price_diff_usd_per_ton: toNum(diffUsdTon) ?? 0
     }, prices);
 
-    if (preview == null) {
-      alert('Kein aktueller Preis berechenbar (Marktdaten prüfen / Differential setzen).');
+    if (value == null) {
+      alert('Kein aktueller Preis berechenbar (Marktdaten/Differential prüfen).');
       return;
     }
 
-    const value = parseFloat(preview); // preview ist String formatiert -> zurückrechnen
     const upd = await supabase.from('green_lots').update({
       price_scheme: 'fixed_eur',
       price_fixed_eur_per_kg: value,
@@ -232,7 +247,7 @@ export default function LotDetail() {
   async function doSplit() {
     if (!id) return;
     const kg = parseFloat(moveKg);
-    if (!srcWh || !dstWh || !isFinite(kg) || kg <= 0) { alert('Bitte Quelle, Ziel und kg angeben.'); return }
+    if (!srcWh || !dstWh || !isFinite(kg) || kg <= 0) { alert('Bitte Quelle, Ziel und kg angeben.'); return; }
     const res = await supabase.rpc('safe_split_green_lot', {
       p_source_id: id, p_src_warehouse_id: srcWh, p_dst_warehouse_id: dstWh,
       p_move_kg: kg, p_new_short_desc: newShort || null
@@ -242,8 +257,8 @@ export default function LotDetail() {
 
   async function doTransfer(all = false) {
     if (!id) return;
-    if (!tSrc || !tDst) { alert('Bitte Quelle & Ziel wählen.'); return }
-    if (tSrc === tDst) { alert('Quelle und Ziel müssen unterschiedlich sein.'); return }
+    if (!tSrc || !tDst) { alert('Bitte Quelle & Ziel wählen.'); return; }
+    if (tSrc === tDst) { alert('Quelle und Ziel müssen unterschiedlich sein.'); return; }
     const kg = all ? null : (isFinite(parseFloat(tKg)) ? parseFloat(tKg) : null);
     const res = await supabase.rpc('safe_transfer_green', {
       p_lot_id: id, p_src_warehouse_id: tSrc, p_dst_warehouse_id: tDst, p_move_kg: kg
@@ -253,7 +268,7 @@ export default function LotDetail() {
 
   if (!lot) return <div>Lade…</div>;
 
-  const pricePreview = computeEurPerKg({
+  const pricePreview = computeEurPerKgFormatted({
     price_scheme: scheme,
     price_base_contract: base,
     price_fixed_eur_per_kg: toNum(fixEurKg),
@@ -452,39 +467,29 @@ export default function LotDetail() {
 }
 
 /* ---------- Helpers ---------- */
-
-function isFiniteNumber(x: any): x is number { return Number.isFinite(Number(x)); }
-function toNum(v: any): number | null {
-  const n = typeof v === 'string' ? Number(v) : v;
-  return Number.isFinite(n) ? Number(n) : null;
-}
+function finite(x: any): number|null { const n = Number(x); return Number.isFinite(n) ? n : null; }
+function toNum(v: any): number | null { const n = typeof v === 'string' ? Number(v) : v; return Number.isFinite(n) ? Number(n) : null; }
 function numOrEmpty(n: number|null|undefined) { return n == null ? '' : String(n); }
 function emptyToNull(s: string) { return s.trim() === '' ? null : Number(s); }
-
-function fmtKg(n: number | null | undefined) {
-  const v = Number(n ?? 0);
-  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(v);
-}
+function fmtKg(n: number | null | undefined) { const v = Number(n ?? 0); return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(v); }
 function fmtMaybe(n: number | null, digits = 2, dash = '—') {
   if (n == null || !Number.isFinite(n)) return dash;
   return new Intl.NumberFormat('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
 }
 
-function computeEurPerKg(lp: {
+// Rohwert (Zahl) berechnen
+function computeEurPerKgRaw(lp: {
   price_scheme: 'fixed_eur'|'fixed_usd'|'differential'|null|undefined;
   price_base_contract: 'kc'|'rc'|null|undefined;
   price_fixed_eur_per_kg: number|null|undefined;
   price_fixed_usd_per_lb: number|null|undefined;
   price_diff_cents_per_lb: number|null|undefined;
   price_diff_usd_per_ton: number|null|undefined;
-}, px: Prices): string | null {
+}, px: Prices): number | null {
   if (!lp?.price_scheme) return null;
-
   let eurPerKg: number | null = null;
 
-  if (lp.price_scheme === 'fixed_eur') {
-    eurPerKg = lp.price_fixed_eur_per_kg ?? null;
-  }
+  if (lp.price_scheme === 'fixed_eur') eurPerKg = lp.price_fixed_eur_per_kg ?? null;
 
   if (lp.price_scheme === 'fixed_usd') {
     if (lp.price_fixed_usd_per_lb != null && px.usd_eur != null) {
@@ -499,11 +504,9 @@ function computeEurPerKg(lp: {
       if (px.kc_usd_per_lb != null && px.usd_eur != null) {
         const diffUsdPerLb = (lp.price_diff_cents_per_lb ?? 0) / 100;
         const usdPerLb = px.kc_usd_per_lb + diffUsdPerLb;
-        const eurPerLb = usdPerLb * px.usd_eur;
-        eurPerKg = eurPerLb * LB_PER_KG;
+        eurPerKg = usdPerLb * px.usd_eur * LB_PER_KG;
       }
     } else {
-      // RC: Basis USD/ton + optional Differential USD/ton
       if (px.rc_usd_per_ton != null && px.usd_eur != null) {
         const usdPerTon = px.rc_usd_per_ton + (lp.price_diff_usd_per_ton ?? 0);
         const eurPerTon = usdPerTon * px.usd_eur;
@@ -511,7 +514,12 @@ function computeEurPerKg(lp: {
       }
     }
   }
+  return Number.isFinite(eurPerKg) ? eurPerKg! : null;
+}
 
-  if (eurPerKg == null || !Number.isFinite(eurPerKg)) return null;
-  return new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(eurPerKg);
+// Formatierte Anzeige
+function computeEurPerKgFormatted(lp: any, px: Prices): string | null {
+  const v = computeEurPerKgRaw(lp, px);
+  if (v == null) return null;
+  return new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 }
