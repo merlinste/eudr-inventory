@@ -1,10 +1,26 @@
-export type FuturesRoot = 'KC' | 'RM'   // RM = Robusta bei Stooq (ICE: RC)
 export const LB_PER_KG = 2.2046226218
+export type Prices = { usd_eur: number|null; kc_usd_per_lb: number|null; rc_usd_per_ton: number|null };
 
-export function monthsFor(root: FuturesRoot) {
-  return root === 'KC'
-    ? [{code:'H',label:'Mar'},{code:'K',label:'May'},{code:'N',label:'Jul'},{code:'U',label:'Sep'},{code:'Z',label:'Dec'}]
-    : [{code:'F',label:'Jan'},{code:'H',label:'Mar'},{code:'K',label:'May'},{code:'N',label:'Jul'},{code:'U',label:'Sep'},{code:'X',label:'Nov'}]
+export function futuresMonths(species: 'arabica'|'robusta', from = new Date(), n = 8) {
+  const all = ['F','G','H','J','K','M','N','Q','U','V','X','Z']; // Jan..Dec
+  const use = species === 'arabica' ? ['H','K','N','U','Z'] : ['F','H','K','N','U','X']; // Coffee-C bzw. Robusta
+  const res: { code:string; label:string }[] = [];
+  let y = from.getUTCFullYear(), m = from.getUTCMonth(); // 0..11
+  let count = 0;
+  while (res.length < n && count < 36) {
+    count++;
+    const letter = all[m];
+    if (use.includes(letter)) {
+      const yy = (y % 10).toString(); // z.B. KCZ5
+      const monthNum = (m+1).toString().padStart(2,'0');
+      res.push({
+        code: letter+yy,
+        label: `${monthNum}/${y}` // „12/2025 (KCZ5)“ ergänzen im UI
+      });
+    }
+    m++; if (m > 11) { m = 0; y++; }
+  }
+  return res;
 }
 
 export async function fetchEurPerKg(params: { root: FuturesRoot, month?: string, year?: number }) {
