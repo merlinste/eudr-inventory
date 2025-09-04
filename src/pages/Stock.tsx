@@ -35,6 +35,7 @@ type LotPrice = {
   price_fixed_eur_per_kg: number | null;
   price_fixed_usd_per_lb: number | null;
   price_diff_cents_per_lb: number | null;
+  price_diff_usd_per_ton: number | null;
   price_base_contract: 'kc' | 'rc' | null;
 };
 
@@ -113,7 +114,7 @@ export default function Stock() {
       const priceRes = await supabase
         .from('green_lots')
         .select(
-          'id, species, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb, price_base_contract'
+          'id, species, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb, price_diff_usd_per_ton, price_base_contract'
         );
 
       setRows((stockData ?? []) as StockRow[]);
@@ -300,30 +301,27 @@ function computeEurPerKg(lp: LotPrice | undefined, px: Prices): string | null {
   if (!lp || !lp.price_scheme) return null;
 
   const LB_PER_KG = 2.2046226218;
-  const usdToEur = px.usd_eur ?? null;
 
   let eurPerKg: number | null = null;
 
-  if (lp.price_scheme === 'fixed_eur') {
-    eurPerKg = lp.price_fixed_eur_per_kg ?? null;
-  }
+  if (lp.price_scheme === 'fixed_eur') eurPerKg = lp.price_fixed_eur_per_kg ?? null;
 
-  if (lp.price_scheme === 'fixed_usd' && lp.price_fixed_usd_per_lb != null && usdToEur != null) {
-    const eurPerLb = lp.price_fixed_usd_per_lb * usdToEur;
+  if (lp.price_scheme === 'fixed_usd' && lp.price_fixed_usd_per_lb != null && px.usd_eur != null) {
+    const eurPerLb = lp.price_fixed_usd_per_lb * px.usd_eur;
     eurPerKg = eurPerLb * LB_PER_KG;
   }
 
   if (lp.price_scheme === 'differential') {
-    if ((lp.price_base_contract ?? 'kc') === 'kc') {
-      if (px.kc_usd_per_lb != null && usdToEur != null) {
+    const base = lp.price_base_contract ?? 'kc';
+    if (base === 'kc') {
+      if (px.kc_usd_per_lb != null && px.usd_eur != null) {
         const diffUsdPerLb = (lp.price_diff_cents_per_lb ?? 0) / 100;
         const usdPerLb = px.kc_usd_per_lb + diffUsdPerLb;
-        const eurPerLb = usdPerLb * usdToEur;
-        eurPerKg = eurPerLb * LB_PER_KG;
+        eurPerKg = usdPerLb * px.usd_eur * LB_PER_KG;
       }
-    } else if (lp.price_base_contract === 'rc') {
-      if (px.rc_usd_per_ton != null && usdToEur != null) {
-        const eurPerTon = px.rc_usd_per_ton * usdToEur;
+    } else {
+      if (px.rc_usd_per_ton != null && px.usd_eur != null) {
+        const eurPerTon = (px.rc_usd_per_ton + (lp.price_diff_usd_per_ton ?? 0)) * px.usd_eur;
         eurPerKg = eurPerTon / 1000;
       }
     }
