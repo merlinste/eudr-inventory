@@ -477,6 +477,30 @@ function fmtMaybe(n: number | null, digits = 2, dash = '—') {
   return new Intl.NumberFormat('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
 }
 
+// helper/contractMonths.ts
+export type ContractChoice = { code: string; label: string; monthDate: string }; // YYYY-MM-01
+
+const monthCode = (m: number) => ['','F','G','H','J','K','M','N','Q','U','V','X','Z'][m]; // 1..12
+const allowed = {
+  kc: [3,5,7,9,12],          // H K N U Z
+  rc: [1,3,5,7,9,11],        // F H K N U X
+};
+
+export function nextContracts(base: 'kc'|'rc', count = 8): ContractChoice[] {
+  const today = new Date();
+  let y = today.getUTCFullYear(), m = today.getUTCMonth()+1;
+  const out: ContractChoice[] = [];
+  while (out.length < count) {
+    m++;
+    if (m > 12) { m = 1; y++; }
+    if (!allowed[base].includes(m)) continue;
+    const code = (base === 'kc' ? 'KC' : 'RC') + monthCode(m) + String(y).slice(-1);
+    const label = `${String(m).padStart(2,'0')}/${y} (${code})`;
+    out.push({ code, label, monthDate: `${y}-${String(m).padStart(2,'0')}-01` });
+  }
+  return out;
+}
+
 // Rohwert (Zahl) berechnen
 function computeEurPerKgRaw(lp: {
   price_scheme: 'fixed_eur'|'fixed_usd'|'differential'|null|undefined;
