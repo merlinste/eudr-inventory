@@ -2,11 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
-import { fetchPrices } from '@/lib/pricing'; // liefert { usd_eur, kc_usd_per_lb, rc_usd_per_ton }
+import { fetchPrices, type Prices } from '@/lib/pricing';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// ---- Typen (schlank und defensiv) ------------------------------------------
 type LotStatus =
   | 'contracted' | 'price_fixed' | 'at_port'
   | 'at_production_wh' | 'produced' | 'closed' | null;
@@ -37,9 +36,6 @@ type Lot = {
 type Wh = { id: string; name: string };
 type WhBalance = { warehouse_id: string; warehouse_name: string; balance_kg: number };
 
-type Prices = { usd_eur: number | null; kc_usd_per_lb: number | null; rc_usd_per_ton: number | null };
-
-// ---- Hilfen -----------------------------------------------------------------
 const fmtKg = (n: number) =>
   new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(n);
 
@@ -49,12 +45,10 @@ const fmtMoney = (n: number) =>
 // 1 lb in kg
 const LB_TO_KG = 0.45359237;
 
-// ---- Komponente -------------------------------------------------------------
 export default function LotDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
 
-  // --- alle Hooks ganz oben (nie bedingt!) -----------------------------------
   const [lot, setLot] = useState<Lot | null>(null);
 
   // Stammdaten-Form
@@ -66,13 +60,17 @@ export default function LotDetail() {
   // Preis-Form
   const [priceScheme, setPriceScheme] = useState<PriceScheme>(null);
   const [baseContract, setBaseContract] = useState<string>('');
-  const [fixedEur, setFixedEur] = useState<string>('');       // Eingabe (EUR/kg)
-  const [fixedUsd, setFixedUsd] = useState<string>('');       // Eingabe (USD/lb)
-  const [diffClb, setDiffClb]   = useState<string>('');       // Arabica (c/lb)
-  const [diffUsdT, setDiffUsdT] = useState<string>('');       // Robusta (USD/t)
+  const [fixedEur, setFixedEur] = useState<string>('');       // EUR/kg
+  const [fixedUsd, setFixedUsd] = useState<string>('');       // USD/lb
+  const [diffClb, setDiffClb]   = useState<string>('');       // c/lb
+  const [diffUsdT, setDiffUsdT] = useState<string>('');       // USD/t
 
   // Marktpreise (FX, KC, RC)
-  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
+  const [prices, setPrices] = useState<Prices>({
+    usd_eur: null,
+    kc_usd_per_lb: null,
+    rc_usd_per_ton: null,
+  });
   const [previewEurKg, setPreviewEurKg] = useState<number | null>(null);
 
   // Lager
@@ -84,7 +82,6 @@ export default function LotDetail() {
   const mapRef       = useRef<L.Map | null>(null);
   const geoLayerRef  = useRef<L.GeoJSON | null>(null);
 
-  // --- Daten laden -----------------------------------------------------------
   useEffect(() => {
     if (!id) return;
     void loadAll(id);
@@ -106,13 +103,11 @@ export default function LotDetail() {
       const d = lr.data as unknown as Lot;
       setLot(d);
 
-      // Stammdaten
       setShortDesc(d.short_desc ?? '');
       setStatus((d.status ?? 'contracted') as LotStatus);
       setDdsRef(d.dds_reference ?? '');
       setExtNo(d.external_contract_no ?? '');
 
-      // Preise
       setPriceScheme(d.price_scheme ?? null);
       setBaseContract(d.price_base_contract ?? '');
       setFixedEur(d.price_fixed_eur_per_kg?.toString() ?? '');
@@ -136,7 +131,6 @@ export default function LotDetail() {
     await loadGeoJSON(lotId);
   }
 
-  // --- Leaflet ---------------------------------------------------------------
   function initMapOnce() {
     if (mapRef.current || !mapElRef.current) return;
     const m = L.map(mapElRef.current, { center: [0,0], zoom: 2, worldCopyJump: true });
@@ -198,7 +192,6 @@ export default function LotDetail() {
     }
   }
 
-  // --- Speichern / Preise ----------------------------------------------------
   async function saveEdit() {
     if (!id) return;
     const upd = await supabase.from('green_lots').update({
@@ -220,7 +213,6 @@ export default function LotDetail() {
   async function refreshMarket() {
     const p = await fetchPrices();
     setPrices(p);
-    // Vorschau berechnen
     const eurkg = computePreviewEURkg(
       lot?.species ?? 'arabica',
       priceScheme,
@@ -241,21 +233,19 @@ export default function LotDetail() {
     else { setPriceScheme('fixed_eur'); setFixedEur(String(previewEurKg)); alert('Preis festgeschrieben.'); }
   }
 
-  // --- Render ----------------------------------------------------------------
   if (!lot) return <div className="p-4">Lade…</div>;
 
   const priceInfo = useMemo(() => {
-    const fx   = prices.usd_eur ?? 0;
-    const kc   = prices.kc_usd_per_lb ?? 0;
-    const rc   = prices.rc_usd_per_ton ?? 0;
-    return `FX USD→EUR: ${fx.toFixed(4)} · KC (USD/lb): ${kc.toFixed(4)} · RC (USD/t): ${rc ? rc.toFixed(0) : '—'}`;
+    const fx = prices.usd_eur ?? 0;
+    const kc = prices.kc_usd_per_lb ?? 0;
+    const rc = prices.rc_usd_per_ton ?? 0;
+    return `FX USD→EUR: ${fx ? fx.toFixed(4) : '—'} · KC (USD/lb): ${kc ? kc.toFixed(4) : '—'} · RC (USD/t): ${rc ? rc.toFixed(0) : '—'}`;
   }, [prices]);
 
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-semibold">Lot‑Details</h2>
 
-      {/* Kopfzeile mit Lot-Nummer */}
       <div className="text-sm text-slate-600">
         <span className="font-medium">Lot‑Nr.:</span> <span className="font-mono">{lot.lot_no ?? '—'}</span>
         {lot.root_lot_no ? <>
@@ -314,7 +304,6 @@ export default function LotDetail() {
             </select>
           </label>
 
-          {/* Nur bei Differential zeigen */}
           {priceScheme === 'differential' && (
             <label>Basis‑Kontrakt
               <select className="border rounded px-3 py-2 w-full"
@@ -382,7 +371,6 @@ export default function LotDetail() {
   );
 }
 
-// ---- Preis-Vorschau berechnen (einheitlich zur Stock-Seite) -----------------
 function computePreviewEURkg(
   species: Species,
   scheme: PriceScheme,
