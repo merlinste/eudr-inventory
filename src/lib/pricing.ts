@@ -1,70 +1,77 @@
 // src/lib/pricing.ts
+// Zentrale Preis-Typen + Helfer. Einheitlich für Stock/LotDetail/etc.
+
 export type Prices = {
-  usd_eur: number | null
-  kc_usd_per_lb: number | null
+  usd_eur: number | null;        // 1 USD in EUR
+  kc_usd_per_lb: number | null;  // Arabica (KC=F) in USD/lb
+  rc_usd_per_ton: number | null; // Robusta in USD/Metric Tonne (kann null sein)
+};
+
+export type ContractOpt = { value: string; label: string; yyyymm: string };
+
+// Month-Codes und Zyklen
+const MONTH_CODES = ['F','G','H','J','K','M','N','Q','U','V','X','Z'];
+const KC_CYCLE = new Set(['H','K','N','U','Z']); // Mar, May, Jul, Sep, Dec
+const RC_CYCLE = new Set(['F','H','K','N','U','X']); // Jan, Mar, May, Jul, Sep, Nov
+
+/**
+ * Nächste N Kontraktmonate (Label "MM/YYYY (KCZ5)" etc.)
+ * species: 'arabica' | 'robusta' | 'other' (other -> Arabica-Zyklus)
+ */
+export function futuresMonths(
+  species: 'arabica' | 'robusta' | 'other' = 'arabica',
+  count = 8
+): ContractOpt[] {
+  const useRCycle = species === 'robusta';
+  const res: ContractOpt[] = [];
+  const d = new Date();
+  d.setUTCDate(1);
+  while (res.length < count) {
+    const m = d.getUTCMonth();      // 0..11
+    const y = d.getUTCFullYear();   // z.B. 2025
+    const code = MONTH_CODES[m];
+    const ok = useRCycle ? RC_CYCLE.has(code) : KC_CYCLE.has(code);
+    if (ok) {
+      const sym = useRCycle ? 'RC' : 'KC';
+      const y1 = String(y).slice(-1);               // 2025 -> "5"
+      const codeStr = `${sym}${code}${y1}`;         // KCZ5 etc.
+      const mm = String(m + 1).padStart(2, '0');    // "12"
+      res.push({
+        value: codeStr,
+        label: `${mm}/${y} (${codeStr})`,
+        yyyymm: `${y}-${mm}`,
+      });
+    }
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+  return res;
 }
 
+// Zahlensafe
+const num = (v: unknown): number | null => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Holt Preise zentral. Erwartet eine Netlify-Function unter /.netlify/functions/prices,
+ * liefert aber immer alle drei Keys zurück (fehlende Felder -> null), damit TS konsistent bleibt.
+ */
 export async function fetchPrices(): Promise<Prices> {
   try {
-    const r = await fetch('/.netlify/functions/prices', { cache: 'no-store' })
-    if (!r.ok) throw new Error(String(r.status))
-    const j = await r.json()
-    return {
-      usd_eur: typeof j.usd_eur === 'number' ? j.usd_eur : null,
-      kc_usd_per_lb: typeof j.kc_usd_per_lb === 'number' ? j.kc_usd_per_lb : null
+    const r = await fetch('/.netlify/functions/prices', {
+      headers: { 'cache-control': 'no-cache' },
+    });
+    if (r.ok) {
+      const j: any = await r.json();
+      return {
+        usd_eur: num(j.usd_eur),
+        kc_usd_per_lb: num(j.kc_usd_per_lb),
+        rc_usd_per_ton: j.hasOwnProperty('rc_usd_per_ton') ? num(j.rc_usd_per_ton) : null,
+      };
     }
   } catch {
-    return { usd_eur: null, kc_usd_per_lb: null }
+    // ignore
   }
+  return { usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null };
 }
-
-// ---- Preisrechner ----
-const LB_PER_KG = 2.20462262185
-
-export type LotForPrice = {
-  species: 'arabica' | 'robusta' | 'other' | null
-  price_scheme: 'fixed_eur' | 'fixed_usd' | 'differential' | null
-  price_fixed_eur_per_kg?: number | null
-  price_fixed_usd_per_lb?: number | null
-  price_diff_cents_per_lb?: number | null   // Arabica (KC)
-  price_diff_usd_per_ton?: number | null    // Robusta (RC)
-}
-
-export function calcEurPerKgForLot(lot: LotForPrice, p: Prices): number | null {
-  if (!lot?.price_scheme) return null
-
-  // 1) Direkt fixiert in EUR/kg
-  if (lot.price_scheme === 'fixed_eur') {
-    return numOrNull(lot.price_fixed_eur_per_kg)
-  }
-
-  // 2) Fixiert in USD/lb -> EUR/kg
-  if (lot.price_scheme === 'fixed_usd') {
-    const usd = numOrNull(lot.price_fixed_usd_per_lb)
-    if (usd == null || p.usd_eur == null) return null
-    return round2(usd * LB_PER_KG * p.usd_eur)
-  }
-
-  // 3) Differential
-  if (lot.price_scheme === 'differential') {
-    if (lot.species === 'arabica') {
-      // Arabica: KC_Front (USD/lb) + diff (c/lb)
-      if (p.kc_usd_per_lb == null || p.usd_eur == null) return null
-      const diff_c = numOrNull(lot.price_diff_cents_per_lb) ?? 0
-      const usd_lb = p.kc_usd_per_lb + diff_c / 100
-      return round2(usd_lb * LB_PER_KG * p.usd_eur)
-    }
-    if (lot.species === 'robusta') {
-      // (Platzhalter) – bis RC‑Quelle steht, kein Preis
-      return null
-    }
-  }
-  return null
-}
-
-function numOrNull(x: unknown): number | null {
-  const n = typeof x === 'string' ? Number(x) : (typeof x === 'number' ? x : NaN)
-  return Number.isFinite(n) ? n : null
-}
-
-function round2(n: number): number { return Math.round(n * 100) / 100 }
