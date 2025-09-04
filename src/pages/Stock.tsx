@@ -2,9 +2,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
-import { fetchPrices, type Prices } from '@/lib/pricing';
+import { Prices, fetchPrices, calcEurPerKgForLot, fmtEurPerKg } from '@/lib/pricing';
 
 const STOCK_VIEW = 'v_green_stock'; // ggf. auf deinen View-Namen anpassen
+const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
 
 type LotStatus =
   | 'contracted' | 'price_fixed' | 'at_port'
