@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
+import { futuresMonths } from '@/lib/pricing';
 
 type Species = 'arabica' | 'robusta' | 'other';
 type LotStatus = 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null;
@@ -31,6 +32,7 @@ type ContractOpt = { value: string; label: string; yyyymm: string };
 const MONTH_CODES = ['F','G','H','J','K','M','N','Q','U','V','X','Z'];
 const KC_CYCLE = new Set(['H','K','N','U','Z']); // Mar, May, Jul, Sep, Dec
 const RC_CYCLE = new Set(['F','H','K','N','U','X']); // Jan, Mar, May, Jul, Sep, Nov
+const months = futuresMonths(form.species as any);
 
 function buildNextContracts(count: number, product: 'KC'|'RC'): ContractOpt[] {
   const res: ContractOpt[] = [];
