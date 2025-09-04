@@ -457,7 +457,7 @@ export default function LotDetail() {
       <div className="border rounded p-4 space-y-3">
         <h3 className="font-medium">Karte & Plots (GeoJSON)</h3>
         <div className="flex items-center gap-3">
-          <input type="file" accept=".json,.geojson,application/geo+json,application/json" onChange={handleGeoJSONFile}/>
+          <input type="file" accept=".json,.geojson,application/geo+json,application/json" onChange={onGeoJSONFile}/>
           <span className="text-xs text-slate-500">Feature/FeatureCollection; WGS84.</span>
         </div>
         <div ref={mapElRef} className="h-[460px] w-full border rounded" />
