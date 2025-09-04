@@ -1,55 +1,57 @@
 // netlify/functions/prices.ts
-type Resp = {
-  usd_eur: number | null
-  kc_usd_per_lb: number | null   // USD/lb (skaliert aus ¢/lb)
-  rc_usd_per_ton: number | null  // USD/ton
-  kc_symbol: string | null
-  rc_symbol: string | null
-}
+import type { Handler } from '@netlify/functions';
 
-async function withTimeout(url: string, ms = 10000) {
-  const ac = new AbortController()
-  const t = setTimeout(() => ac.abort(), ms)
-  try { return await fetch(url, { signal: ac.signal }) } finally { clearTimeout(t) }
-}
-
-async function yahooClose(symbol: string): Promise<number | null> {
+async function yahooLast(symbol: string): Promise<number | null> {
   try {
-    const r = await withTimeout(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`,
-      10000
-    )
-    const j = await r.json()
-    const res = j?.chart?.result?.[0]
-    const close = res?.indicators?.quote?.[0]?.close?.[0]
-    const price = typeof close === 'number' ? close : res?.meta?.regularMarketPrice
-    return typeof price === 'number' ? price : null
-  } catch { return null }
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const j = await r.json();
+    const meta = j?.chart?.result?.[0]?.meta;
+    const direct = meta?.regularMarketPrice;
+    if (Number.isFinite(direct)) return Number(direct);
+    const close = j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+    const last = Array.isArray(close) ? close.filter((x: any) => Number.isFinite(x)).slice(-1)[0] : null;
+    return Number.isFinite(last) ? Number(last) : null;
+  } catch {
+    return null;
+  }
 }
 
-export async function handler() {
-  const out: Resp = { usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null, kc_symbol: null, rc_symbol: null }
-
-  // FX USD→EUR
+export const handler: Handler = async () => {
   try {
-    const fx = await withTimeout('https://open.er-api.com/v6/latest/USD', 10000)
-    const fxj = await fx.json()
-    if (typeof fxj?.rates?.EUR === 'number') out.usd_eur = fxj.rates.EUR
-  } catch {}
+    // FX USD->EUR
+    // exchangerate.host ist frei & ohne API-Schlüssel
+    const fxRes = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=EUR');
+    const fxJson = await fxRes.json().catch(() => ({}));
+    const usd_eur: number | null = Number(fxJson?.rates?.EUR) || null;
 
-  // KC (Arabica) – Yahoo liefert ¢/lb → in USD/lb skalieren
-  const kcRaw = await yahooClose('KC=F')
-  if (kcRaw != null) {
-    // Heuristik: wenn > 10, ist es nahezu sicher ¢/lb ⇒ ÷100
-    out.kc_usd_per_lb = kcRaw > 10 ? kcRaw / 100 : kcRaw
-    out.kc_symbol = 'KC=F'
+    // Arabica (ICE US) – Yahoo: KC=F
+    const kc_usd_per_lb = await yahooLast('KC=F');
+
+    // Robusta (ICE Europe) – mögliche Yahoo-Symbole (nicht immer stabil):
+    // Reihenfolge als Fallback-Kaskade.
+    const rcCandidates = ['LRC=F', 'RC=F', 'COFFEE-RC=F'];
+    let rc_usd_per_ton: number | null = null;
+    for (const sym of rcCandidates) {
+      const v = await yahooLast(sym);
+      if (Number.isFinite(v)) {
+        // Einige Feeds liefern Robusta in USD/ton direkt; sollte es USD/lb sein, kann man hier umrechnen.
+        rc_usd_per_ton = Number(v);
+        break;
+      }
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ usd_eur, kc_usd_per_lb, rc_usd_per_ton }),
+      headers: { 'content-type': 'application/json' },
+    };
+  } catch (e: any) {
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null, error: e?.message }),
+      headers: { 'content-type': 'application/json' },
+    };
   }
-
-  // RC (Robusta) – USD/ton
-  for (const sym of ['RM=F', 'RC=F', 'LRC=F']) {
-    const rc = await yahooClose(sym)
-    if (rc != null) { out.rc_usd_per_ton = rc; out.rc_symbol = sym; break }
-  }
-
-  return { statusCode: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(out) }
-}
+};
