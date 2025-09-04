@@ -1,225 +1,209 @@
 // src/pages/Lots.tsx
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { supabase } from '@/lib/supabaseClient'
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { supabase } from '@/lib/supabaseClient';
+
+type Species = 'arabica' | 'robusta' | 'other';
+type LotStatus = 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null;
+type PriceScheme = 'fixed_eur'|'fixed_usd'|'differential'|null;
 
 type LotRow = {
-  id: string
-  lot_no: string
-  root_lot_no: string
-  short_desc: string | null
-  origin_country: string | null
-  organic: boolean
-  species: 'arabica'|'robusta'|'other'
-  status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null
-  dds_reference: string | null
-  external_contract_no: string | null
-  price_scheme: 'fixed_eur'|'fixed_usd'|'differential'|null
-  price_fixed_eur_per_kg: number | null
-  price_fixed_usd_per_lb: number | null
-  price_diff_cents_per_lb: number | null
-  price_base_contract: 'KC'|'RC'|null
-  price_base_month: string | null
-  created_at?: string | null
-}
+  id: string;
+  lot_no?: string | null;
+  short_desc: string | null;
+  origin_country: string | null;
+  organic: boolean;
+  species: Species;
+  status: LotStatus;
+  dds_reference?: string | null;
+  external_contract_no?: string | null;
+  price_scheme: PriceScheme;
+  price_fixed_eur_per_kg?: number | null;
+  price_fixed_usd_per_lb?: number | null;
+  price_diff_cents_per_lb?: number | null;
+  price_diff_usd_per_ton?: number | null;
+  price_base_contract?: string | null;
+};
 
-type Warehouse = { id: string; name: string }
-type Form = {
-  short_desc: string
-  external_contract_no: string
-  dds_reference: string
-  origin_country: string
-  organic: boolean
-  species: 'arabica'|'robusta'|'other'
-  status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'
-  price_scheme: 'fixed_eur'|'fixed_usd'|'differential'
-  price_fixed_eur_per_kg: string
-  price_fixed_usd_per_lb: string
-  price_diff_cents_per_lb: string
-  price_base_contract: 'KC'|'RC'
-  price_base_month: string
-  initial_warehouse_id: string
-  initial_kg: string
+type ContractOpt = { value: string; label: string; yyyymm: string };
+
+// Month code map: Jan..Dec -> F G H J K M N Q U V X Z
+const MONTH_CODES = ['F','G','H','J','K','M','N','Q','U','V','X','Z'];
+const KC_CYCLE = new Set(['H','K','N','U','Z']); // Mar, May, Jul, Sep, Dec
+const RC_CYCLE = new Set(['F','H','K','N','U','X']); // Jan, Mar, May, Jul, Sep, Nov
+
+function buildNextContracts(count: number, product: 'KC'|'RC'): ContractOpt[] {
+  const res: ContractOpt[] = [];
+  const d = new Date();
+  d.setUTCDate(1); // auf Monatsanfang
+  while (res.length < count) {
+    const m = d.getUTCMonth();                   // 0..11
+    const y = d.getUTCFullYear();               // 2025, ...
+    const code = MONTH_CODES[m];                // F..Z
+    const ok = product === 'RC' ? RC_CYCLE.has(code) : KC_CYCLE.has(code);
+    if (ok) {
+      const sym = product;
+      const y1 = String(y).slice(-1);           // 2025 -> "5"
+      const codeStr = `${sym}${code}${y1}`;     // z.B. KCZ5
+      const mm = String(m+1).padStart(2,'0');   // "12"
+      res.push({
+        value: codeStr,
+        label: `${mm}/${y} (${codeStr})`,
+        yyyymm: `${y}-${mm}`,
+      });
+    }
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+  return res;
 }
 
 const COUNTRIES = [
-  'Brazil','Colombia','Ethiopia','Vietnam','Honduras','Peru','Uganda','Mexico','Guatemala','Nicaragua',
-  'Costa Rica','Kenya','Tanzania','Rwanda','Burundi','Panama','El Salvador','Indonesia','India',
-  'Papua New Guinea','Bolivia','Yemen','China','Dominican Republic','Congo',"Cote d'Ivoire"
-]
-
-// helper/contractMonths.ts
-export type ContractChoice = { code: string; label: string; monthDate: string }; // YYYY-MM-01
-
-const monthCode = (m: number) => ['','F','G','H','J','K','M','N','Q','U','V','X','Z'][m]; // 1..12
-const allowed = {
-  kc: [3,5,7,9,12],          // H K N U Z
-  rc: [1,3,5,7,9,11],        // F H K N U X
-};
-
-export function nextContracts(base: 'kc'|'rc', count = 8): ContractChoice[] {
-  const today = new Date();
-  let y = today.getUTCFullYear(), m = today.getUTCMonth()+1;
-  const out: ContractChoice[] = [];
-  while (out.length < count) {
-    m++;
-    if (m > 12) { m = 1; y++; }
-    if (!allowed[base].includes(m)) continue;
-    const code = (base === 'kc' ? 'KC' : 'RC') + monthCode(m) + String(y).slice(-1);
-    const label = `${String(m).padStart(2,'0')}/${y} (${code})`;
-    out.push({ code, label, monthDate: `${y}-${String(m).padStart(2,'0')}-01` });
-  }
-  return out;
-}
+  // kurz gehalten – füge gerne weitere hinzu
+  'Brazil','Colombia','Peru','Ethiopia','Kenya','Guatemala','Honduras','India','Indonesia','Uganda','Tanzania','Vietnam','Mexico','Nicaragua','Rwanda','Burundi'
+];
 
 export default function Lots() {
-  const [rows, setRows] = useState<LotRow[]>([])
-  const [q, setQ] = useState('')
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
-  const [form, setForm] = useState<Form>({
+  const [rows, setRows] = useState<LotRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState('');
+
+  // Formularzustand
+  const [species, setSpecies] = useState<Species>('arabica');
+  const [priceScheme, setPriceScheme] = useState<PriceScheme>('fixed_eur');
+
+  const [form, setForm] = useState({
     short_desc: '',
-    external_contract_no: '',
-    dds_reference: '',
     origin_country: 'Brazil',
     organic: false,
-    species: 'arabica',
-    status: 'contracted',
-    price_scheme: 'fixed_eur',
-    price_fixed_eur_per_kg: '',
-    price_fixed_usd_per_lb: '',
-    price_diff_cents_per_lb: '',
-    price_base_contract: 'KC',
-    price_base_month: '',
-    initial_warehouse_id: '',
-    initial_kg: ''
-  })
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+    species: 'arabica' as Species,
+    status: 'contracted' as LotStatus,
+    dds_reference: '',
+    external_contract_no: '',
+    // Preisfelder
+    price_scheme: 'fixed_eur' as PriceScheme,
+    price_fixed_eur_per_kg: '' as string | number,
+    price_fixed_usd_per_lb: '' as string | number,
+    price_diff_cents_per_lb: '' as string | number,
+    price_diff_usd_per_ton: '' as string | number,
+    price_base_contract: '' as string,
+  });
 
-  const monthOptions = useMemo(
-    () => futuresMonths(form.price_base_contract, 18),
-    [form.price_base_contract]
-  )
+  // Kontraktliste abhängig von Spezies
+  const contractOptions = useMemo<ContractOpt[]>(
+    () => buildNextContracts(8, form.species === 'robusta' ? 'RC' : 'KC'),
+    [form.species]
+  );
 
-  useEffect(() => { void loadAll() }, [])
-  async function loadAll() {
-    const [lots, wh] = await Promise.all([
-      supabase.from('green_lots').select('id,lot_no,root_lot_no,short_desc,origin_country,organic,species,status,dds_reference,external_contract_no,price_scheme,price_fixed_eur_per_kg,price_fixed_usd_per_lb,price_diff_cents_per_lb,price_base_contract,price_base_month,created_at').order('created_at', { ascending: false }),
-      supabase.from('v_my_warehouses').select('id,name').order('name')
-    ])
-    if (!lots.error) setRows((lots.data ?? []) as LotRow[])
-    if (!wh.error) setWarehouses((wh.data ?? []) as Warehouse[])
+  useEffect(() => { void load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('green_lots')
+      .select('id, lot_no, short_desc, origin_country, organic, species, status, dds_reference, external_contract_no, price_scheme, price_base_contract')
+      .order('created_at', { ascending: false });
+    if (!error && data) setRows(data as LotRow[]);
+    setLoading(false);
   }
 
-  const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase()
-    if (!t) return rows
-    return rows.filter(r =>
-      (r.short_desc ?? '').toLowerCase().includes(t) ||
-      (r.origin_country ?? '').toLowerCase().includes(t) ||
-      (r.external_contract_no ?? '').toLowerCase().includes(t) ||
-      (r.dds_reference ?? '').toLowerCase().includes(t)
-    )
-  }, [rows, q])
+  function resetForm() {
+    setForm({
+      short_desc: '',
+      origin_country: 'Brazil',
+      organic: false,
+      species: 'arabica',
+      status: 'contracted',
+      dds_reference: '',
+      external_contract_no: '',
+      price_scheme: 'fixed_eur',
+      price_fixed_eur_per_kg: '',
+      price_fixed_usd_per_lb: '',
+      price_diff_cents_per_lb: '',
+      price_diff_usd_per_ton: '',
+      price_base_contract: contractOptions[0]?.value ?? '',
+    });
+    setSpecies('arabica');
+    setPriceScheme('fixed_eur');
+  }
 
-  async function createLot() {
-    setErr(null); setBusy(true)
-    try {
-      if (form.price_scheme === 'differential') {
-        if (!form.price_base_contract || !form.price_base_month || form.price_diff_cents_per_lb === '') {
-          throw new Error('Bitte Basis (KC/RC), Liefermonat und Differential (c/lb) ausfuellen.')
-        }
+  async function submitNewLot(e: React.FormEvent) {
+    e.preventDefault();
+
+    // Payload zusammenstellen – nur relevante Preisfelder mitsenden
+    const payload: any = {
+      short_desc: form.short_desc || null,
+      origin_country: form.origin_country || null,
+      organic: !!form.organic,
+      species: form.species,
+      status: form.status,
+      dds_reference: form.dds_reference || null,
+      external_contract_no: form.external_contract_no || null,
+      price_scheme: form.price_scheme,
+      price_base_contract: form.price_base_contract || null,
+    };
+
+    if (form.price_scheme === 'fixed_eur') {
+      payload.price_fixed_eur_per_kg = form.price_fixed_eur_per_kg ? Number(form.price_fixed_eur_per_kg) : null;
+      payload.price_fixed_usd_per_lb = null;
+      payload.price_diff_cents_per_lb = null;
+      payload.price_diff_usd_per_ton = null;
+    } else if (form.price_scheme === 'fixed_usd') {
+      payload.price_fixed_usd_per_lb = form.price_fixed_usd_per_lb ? Number(form.price_fixed_usd_per_lb) : null;
+      payload.price_fixed_eur_per_kg = null;
+      payload.price_diff_cents_per_lb = null;
+      payload.price_diff_usd_per_ton = null;
+    } else if (form.price_scheme === 'differential') {
+      if (form.species === 'arabica') {
+        payload.price_diff_cents_per_lb = form.price_diff_cents_per_lb ? Number(form.price_diff_cents_per_lb) : null;
+        payload.price_diff_usd_per_ton = null;
+      } else if (form.species === 'robusta') {
+        payload.price_diff_usd_per_ton = form.price_diff_usd_per_ton ? Number(form.price_diff_usd_per_ton) : null;
+        payload.price_diff_cents_per_lb = null;
       }
+      payload.price_fixed_eur_per_kg = null;
+      payload.price_fixed_usd_per_lb = null;
+    }
 
-      const prof = await supabase.from('profiles').select('org_id').maybeSingle()
-      if (prof.error) throw prof.error
-      const orgId = prof.data?.org_id
-      if (!orgId) throw new Error('Kein org_id im Profil.')
-
-      const payload = {
-        org_id: orgId,
-        short_desc: form.short_desc || null,
-        origin_country: form.origin_country || null,
-        organic: !!form.organic,
-        species: form.species,
-        status: form.status,
-        dds_reference: form.dds_reference || null,
-        external_contract_no: form.external_contract_no || null,
-
-        price_scheme: form.price_scheme,
-        price_fixed_eur_per_kg: form.price_scheme === 'fixed_eur'
-          ? (form.price_fixed_eur_per_kg ? Number(form.price_fixed_eur_per_kg) : null)
-          : null,
-        price_fixed_usd_per_lb: form.price_scheme === 'fixed_usd'
-          ? (form.price_fixed_usd_per_lb ? Number(form.price_fixed_usd_per_lb) : null)
-          : null,
-        price_diff_cents_per_lb: form.price_scheme === 'differential'
-          ? (form.price_diff_cents_per_lb ? Number(form.price_diff_cents_per_lb) : null)
-          : null,
-        price_base_contract: form.price_scheme === 'differential' ? form.price_base_contract : null,
-        price_base_month: form.price_scheme === 'differential' ? (form.price_base_month || null) : null
-      }
-
-      const ins = await supabase.from('green_lots').insert([payload]).select('id').single()
-      if (ins.error) throw ins.error
-      const newId = ins.data!.id as string
-
-      const initKg = Number(form.initial_kg || '0')
-      if (form.initial_warehouse_id && initKg > 0) {
-        const mv = await supabase.from('inventory_moves').insert([{
-          org_id: orgId,
-          item: 'green',
-          green_lot_id: newId,
-          delta_kg: initKg,
-          warehouse_id: form.initial_warehouse_id,
-          note: 'initial stock',
-          direction: 'in',
-          reason: 'initial'
-        }])
-        if (mv.error) throw mv.error
-      }
-
-      setForm(f => ({
-        ...f,
-        short_desc: '',
-        external_contract_no: '',
-        dds_reference: '',
-        price_fixed_eur_per_kg: '',
-        price_fixed_usd_per_lb: '',
-        price_diff_cents_per_lb: '',
-        price_base_month: '',
-        initial_kg: ''
-      }))
-      await loadAll()
-      alert('Lot angelegt.')
-    } catch (e: any) {
-      setErr(e.message ?? String(e))
-    } finally {
-      setBusy(false)
+    const { error } = await supabase.from('green_lots').insert([payload]);
+    if (error) {
+      alert(error.message);
+    } else {
+      resetForm();
+      await load();
+      alert('Neues Lot angelegt.');
     }
   }
 
-  async function deleteLot(id: string) {
-    if (!confirm('Lot wirklich loeschen?')) return
-    const res = await supabase.from('green_lots').delete().eq('id', id)
-    if (res.error) alert(res.error.message)
-    else setRows(prev => prev.filter(r => r.id !== id))
+  async function removeLot(id: string) {
+    if (!confirm('Wirklich löschen?')) return;
+    const { error } = await supabase.from('green_lots').delete().eq('id', id);
+    if (error) alert(error.message);
+    else setRows(prev => prev.filter(r => r.id !== id));
   }
+
+  const filtered = rows.filter(r => {
+    const s = (q || '').toLowerCase();
+    if (!s) return true;
+    const hay = [r.lot_no, r.short_desc, r.origin_country, r.external_contract_no, r.dds_reference].join(' ').toLowerCase();
+    return hay.includes(s);
+  });
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold">Rohkaffee-Lots</h2>
+      <h2 className="text-lg font-semibold">Rohkaffee‑Lots</h2>
 
-      <div className="flex items-center justify-between gap-3">
-        <input className="border rounded px-3 py-2 w-full max-w-md text-sm"
-               placeholder="Suche (Bezeichnung, Herkunft, DDS, Kontrakt)…"
-               value={q} onChange={e=>setQ(e.target.value)} />
-        <div className="text-sm text-slate-500">{filtered.length} von {rows.length}</div>
-      </div>
+      {/* Suche */}
+      <input
+        className="border rounded px-3 py-2 w-full"
+        placeholder="Suche (Bezeichnung, Herkunft, DDS, Kontrakt)…"
+        value={q}
+        onChange={e=>setQ(e.target.value)}
+      />
 
-      <div className="border rounded overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50">
+      {/* Tabelle */}
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="border-b bg-slate-50">
             <tr>
               <th className="text-left p-2">Lot‑Nr.</th>
               <th className="text-left p-2">Bezeichnung</th>
@@ -233,61 +217,75 @@ export default function Lots() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map(r => (
-              <tr key={r.id} className="border-t">
-                <td className="p-2"><Link className="text-sky-700 hover:underline" to={`/lots/${r.id}`}>{r.short_desc ?? '-'}</Link></td>
-                <td className="p-2">{r.origin_country ?? '-'}</td>
+            {loading ? (
+              <tr><td className="p-3" colSpan={9}>Lade…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td className="p-3" colSpan={9}>Keine Lots gefunden.</td></tr>
+            ) : filtered.map((r: LotRow) => (
+              <tr key={r.id} className="border-b">
+                <td className="p-2 font-mono">{r.lot_no ?? '—'}</td>
+                <td className="p-2">
+                  <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">
+                    {r.short_desc ?? '—'}
+                  </Link>
+                </td>
+                <td className="p-2">{r.origin_country ?? '—'}</td>
                 <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
                 <td className="p-2">{r.species}</td>
-                <td className="p-2">{r.status ?? '-'}</td>
-                <td className="p-2">{r.dds_reference ?? '-'}</td>
-                <td className="p-2">{r.external_contract_no ?? '-'}</td>
+                <td className="p-2">{toStatusLabel(r.status)}</td>
+                <td className="p-2">{r.dds_reference ?? '—'}</td>
+                <td className="p-2">{r.external_contract_no ?? '—'}</td>
                 <td className="p-2">
                   <div className="flex gap-2">
-                    <Link className="rounded bg-slate-100 px-2 py-1 text-xs" to={`/lots/${r.id}`}>Details</Link>
-                    <button className="rounded bg-red-100 text-red-700 text-xs px-2 py-1" onClick={() => deleteLot(r.id)}>Loeschen</button>
+                    <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">Details</Link>
+                    <button className="text-red-600 hover:underline" onClick={()=>removeLot(r.id)}>Löschen</button>
                   </div>
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td className="p-2" colSpan={8}>Keine Lots gefunden.</td></tr>}
           </tbody>
         </table>
       </div>
 
-      <div className="border rounded p-4 space-y-4">
-        <h3 className="font-medium">Neues Lot anlegen</h3>
-
-        <div className="grid grid-cols-3 gap-3 text-sm">
+      {/* Formular: neues Lot */}
+      <div className="border rounded p-4">
+        <h3 className="font-medium mb-3">Neues Lot anlegen</h3>
+        <form onSubmit={submitNewLot} className="grid grid-cols-2 gap-3 text-sm">
           <label>Bezeichnung
             <input className="border rounded px-3 py-2 w-full"
-                   value={form.short_desc} onChange={e=>setForm(f=>({ ...f, short_desc: e.target.value }))} />
+              value={form.short_desc}
+              onChange={e=>setForm({...form, short_desc: e.target.value})}/>
           </label>
+
           <label>Herkunftsland
             <select className="border rounded px-3 py-2 w-full"
-                    value={form.origin_country} onChange={e=>setForm(f=>({ ...f, origin_country: e.target.value }))}>
-              {COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <label>Bio
-            <select className="border rounded px-3 py-2 w-full"
-                    value={form.organic ? '1':'0'} onChange={e=>setForm(f=>({ ...f, organic: e.target.value === '1' }))}>
-              <option value="0">Nein</option>
-              <option value="1">Ja</option>
+              value={form.origin_country ?? ''}
+              onChange={e=>setForm({...form, origin_country: e.target.value})}>
+              {COUNTRIES.map((c: string) => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
 
           <label>Art
             <select className="border rounded px-3 py-2 w-full"
-                    value={form.species} onChange={e=>setForm(f=>({ ...f, species: e.target.value as Form['species'] }))}>
+              value={form.species}
+              onChange={e=>{
+                const sp = e.target.value as Species;
+                setForm({...form, species: sp});
+                setSpecies(sp);
+                // beim Wechsel gleich einen Basis‑Kontrakt vorbelegen
+                const first = buildNextContracts(8, sp === 'robusta' ? 'RC' : 'KC')[0]?.value ?? '';
+                setForm(prev => ({...prev, price_base_contract: first}));
+              }}>
               <option value="arabica">Arabica</option>
               <option value="robusta">Robusta</option>
               <option value="other">Andere</option>
             </select>
           </label>
+
           <label>Status
             <select className="border rounded px-3 py-2 w-full"
-                    value={form.status} onChange={e=>setForm(f=>({ ...f, status: e.target.value as Form['status'] }))}>
+              value={form.status ?? 'contracted'}
+              onChange={e=>setForm({...form, status: e.target.value as LotStatus})}>
               <option value="contracted">Kontrahiert</option>
               <option value="price_fixed">Preis fixiert</option>
               <option value="at_port">Im Hafen</option>
@@ -296,102 +294,105 @@ export default function Lots() {
               <option value="closed">Abgeschlossen</option>
             </select>
           </label>
-          <label>DDS-Referenz
-            <input className="border rounded px-3 py-2 w-full"
-                   value={form.dds_reference} onChange={e=>setForm(f=>({ ...f, dds_reference: e.target.value }))} />
-          </label>
-          <label>Kontraktnummer Importeur/Haendler
-            <input className="border rounded px-3 py-2 w-full"
-                   value={form.external_contract_no} onChange={e=>setForm(f=>({ ...f, external_contract_no: e.target.value }))} />
-          </label>
-        </div>
 
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          <label>Preisschema
+          <label>Bio
             <select className="border rounded px-3 py-2 w-full"
-                    value={form.price_scheme}
-                    onChange={e=>{
-                      const val = e.target.value as Form['price_scheme']
-                      setForm(f=>({
-                        ...f,
-                        price_scheme: val,
-                        price_fixed_eur_per_kg: val==='fixed_eur' ? f.price_fixed_eur_per_kg : '',
-                        price_fixed_usd_per_lb: val==='fixed_usd' ? f.price_fixed_usd_per_lb : '',
-                        price_diff_cents_per_lb: val==='differential' ? f.price_diff_cents_per_lb : '',
-                        price_base_month: val==='differential' ? f.price_base_month : ''
-                      }))
-                    }}>
-              <option value="fixed_eur">Fixiert in EUR/kg</option>
-              <option value="fixed_usd">Fixiert in USD/lb</option>
-              <option value="differential">Differential (c/lb)</option>
+              value={form.organic ? '1' : '0'}
+              onChange={e=>setForm({...form, organic: e.target.value === '1'})}>
+              <option value="0">Nein</option>
+              <option value="1">Ja</option>
             </select>
           </label>
 
-          {form.price_scheme === 'fixed_eur' && (
-            <label>EUR/kg
-              <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
-                     value={form.price_fixed_eur_per_kg}
-                     onChange={e=>setForm(f=>({ ...f, price_fixed_eur_per_kg: e.target.value }))} />
-            </label>
-          )}
-          {form.price_scheme === 'fixed_usd' && (
-            <label>USD/lb
-              <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
-                     value={form.price_fixed_usd_per_lb}
-                     onChange={e=>setForm(f=>({ ...f, price_fixed_usd_per_lb: e.target.value }))} />
-            </label>
-          )}
+          <label>DDS‑Referenz
+            <input className="border rounded px-3 py-2 w-full"
+              value={form.dds_reference}
+              onChange={e=>setForm({...form, dds_reference: e.target.value})}/>
+          </label>
 
-          {form.price_scheme === 'differential' && (
-            <>
-              <label>Basis (KC/RC)
-                <select className="border rounded px-3 py-2 w-full"
-                        value={form.price_base_contract}
-                        onChange={e=>setForm(f=>({ ...f, price_base_contract: e.target.value as Form['price_base_contract'] }))}>
-                  <option value="KC">KC</option>
-                  <option value="RC">RC</option>
-                </select>
+          <label>Kontraktnummer Importeur/Händler
+            <input className="border rounded px-3 py-2 w-full"
+              value={form.external_contract_no}
+              onChange={e=>setForm({...form, external_contract_no: e.target.value})}/>
+          </label>
+
+          {/* Preisschema */}
+          <div className="col-span-2 grid grid-cols-2 gap-3">
+            <label>Preisschema
+              <select className="border rounded px-3 py-2 w-full"
+                value={form.price_scheme ?? 'fixed_eur'}
+                onChange={e=>{
+                  const ps = e.target.value as PriceScheme;
+                  setForm({...form, price_scheme: ps});
+                  setPriceScheme(ps);
+                }}>
+                <option value="fixed_eur">Fixiert in EUR/kg</option>
+                <option value="fixed_usd">Fixiert in USD/lb</option>
+                <option value="differential">Differential</option>
+              </select>
+            </label>
+
+            {/* Basis‑Kontrakt (wird auch bei 'fixed_usd' gezeigt, falls du USD/lb fixierst) */}
+            <label>Basis‑Kontrakt (Monat)
+              <select className="border rounded px-3 py-2 w-full"
+                value={form.price_base_contract ?? ''}
+                onChange={e=>setForm({...form, price_base_contract: e.target.value})}>
+                {contractOptions.map((m: ContractOpt) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </label>
+
+            {priceScheme === 'fixed_eur' && (
+              <label>EUR/kg
+                <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
+                  value={form.price_fixed_eur_per_kg}
+                  onChange={e=>setForm({...form, price_fixed_eur_per_kg: e.target.value})}/>
               </label>
-              <label>Liefermonat
-                <select className="border rounded px-3 py-2 w-full"
-                        value={form.price_base_month}
-                        onChange={e=>setForm(f=>({ ...f, price_base_month: e.target.value }))}>
-                  <option value="">- waehlen -</option>
-                  {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
+            )}
+
+            {priceScheme === 'fixed_usd' && (
+              <label>USD/lb
+                <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
+                  value={form.price_fixed_usd_per_lb}
+                  onChange={e=>setForm({...form, price_fixed_usd_per_lb: e.target.value})}/>
               </label>
-              <label>Differential (c/lb)
+            )}
+
+            {priceScheme === 'differential' && form.species === 'arabica' && (
+              <label>Diff. (c/lb, +/‑)
                 <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
-                       value={form.price_diff_cents_per_lb}
-                       onChange={e=>setForm(f=>({ ...f, price_diff_cents_per_lb: e.target.value }))} />
+                  value={form.price_diff_cents_per_lb}
+                  onChange={e=>setForm({...form, price_diff_cents_per_lb: e.target.value})}/>
               </label>
-            </>
-          )}
-        </div>
+            )}
 
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          <label>Initial-Lager (optional)
-            <select className="border rounded px-3 py-2 w-full"
-                    value={form.initial_warehouse_id}
-                    onChange={e=>setForm(f=>({ ...f, initial_warehouse_id: e.target.value }))}>
-              <option value="">-</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
-          </label>
-          <label>Initial-Menge (kg)
-            <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
-                   value={form.initial_kg}
-                   onChange={e=>setForm(f=>({ ...f, initial_kg: e.target.value }))} />
-          </label>
-        </div>
+            {priceScheme === 'differential' && form.species === 'robusta' && (
+              <label>Diff. (USD/t, +/‑)
+                <input type="number" step="0.1" className="border rounded px-3 py-2 w-full"
+                  value={form.price_diff_usd_per_ton}
+                  onChange={e=>setForm({...form, price_diff_usd_per_ton: e.target.value})}/>
+              </label>
+            )}
+          </div>
 
-        <div className="flex items-center justify-between">
-          {err && <div className="text-red-600 text-sm">{err}</div>}
-          <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={createLot} disabled={busy}>
-            {busy ? 'Speichere...' : 'Lot anlegen'}
-          </button>
-        </div>
+          <div className="col-span-2 flex justify-end mt-2">
+            <button className="rounded bg-slate-800 text-white text-sm px-4 py-2">Lot anlegen</button>
+          </div>
+        </form>
       </div>
     </div>
-  )
+  );
+}
+
+function toStatusLabel(s: LotStatus) {
+  switch (s) {
+    case 'contracted': return 'Kontrahiert';
+    case 'price_fixed': return 'Preis fixiert';
+    case 'at_port': return 'Im Hafen';
+    case 'at_production_wh': return 'Im Produktionslager';
+    case 'produced': return 'Produziert';
+    case 'closed': return 'Abgeschlossen';
+    default: return '—';
+  }
 }
