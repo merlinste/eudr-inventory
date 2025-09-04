@@ -1,70 +1,50 @@
 // netlify/functions/prices.ts
 import type { Handler } from '@netlify/functions';
 
-async function yahooLast(symbol: string): Promise<number | null> {
-  try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
-    const r = await fetch(url); if (!r.ok) return null;
-    const j = await r.json();
-    const m = j?.chart?.result?.[0]?.meta;
-    if (Number.isFinite(m?.regularMarketPrice)) return Number(m.regularMarketPrice);
-    const close = j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
-    const last = Array.isArray(close) ? close.filter((x:any)=>Number.isFinite(x)).slice(-1)[0] : null;
-    return Number.isFinite(last) ? Number(last) : null;
-  } catch { return null; }
-}
+type NDLRow = { column_names: string[]; data: any[][] };
+const ndl = async (code: string, key: string) => {
+  const url = `https://data.nasdaq.com/api/v3/datasets/${code}.json?rows=1&api_key=${encodeURIComponent(key)}`;
+  const r = await fetch(url, { headers: { 'Accept': 'application/json' }});
+  if (!r.ok) throw new Error(`NDL ${code} ${r.status}`);
+  const j = await r.json() as { dataset: { column_names: string[], data: any[][] } };
+  const cols = j.dataset.column_names;
+  const row = j.dataset.data?.[0] || [];
+  const get = (name: string) => {
+    const idx = cols.indexOf(name);
+    return idx >= 0 ? Number(row[idx]) : null;
+  };
+  // vorzugsweise 'Settle', fallback 'Last'
+  return get('Settle') ?? get('Last') ?? null;
+};
 
-async function fxUsdEur(): Promise<number | null> {
-  try {
-    const r = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=EUR');
-    const j = await r.json().catch(()=>({}));
-    const v = Number(j?.rates?.EUR);
-    return Number.isFinite(v) ? v : null;
-  } catch { return null; }
-}
-
-async function rcFromNDL(): Promise<number | null> {
-  const apiKey = process.env.RC_NDL_API_KEY;
-  const dataset = process.env.RC_NDL_DATASET; // z.B. ICE/RC1  (abhängig von deinem Datensatz)
-  if (!apiKey || !dataset) return null;
-
-  try {
-    const url = `https://data.nasdaq.com/api/v3/datasets/${encodeURIComponent(dataset)}.json?rows=1&order=desc&api_key=${encodeURIComponent(apiKey)}`;
-    const r = await fetch(url); if (!r.ok) return null;
-    const j = await r.json();
-    const cols: string[] = j?.dataset?.column_names ?? [];
-    const row: any[] = j?.dataset?.data?.[0] ?? [];
-    // erste numerische Spalte verwenden (Settle/Last/Close/Value …)
-    for (let i = 0; i < row.length; i++) {
-      const val = Number(row[i]);
-      if (Number.isFinite(val) && typeof cols[i] !== 'string' || (cols[i] && cols[i] !== 'Date')) return val;
-    }
-    return null;
-  } catch { return null; }
-}
+const fx = async () => {
+  const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=EUR', { headers: { 'Accept': 'application/json' }});
+  if (!r.ok) throw new Error(`FX ${r.status}`);
+  const j = await r.json() as { rates: { EUR: number } };
+  return Number(j?.rates?.EUR ?? 0) || null;
+};
 
 export const handler: Handler = async () => {
-  const usd_eur = await fxUsdEur();
-  const kc_usd_per_lb = await yahooLast('KC=F');
+  try {
+    const key = process.env.NDL_API_KEY || '';
+    if (!key) throw new Error('NDL_API_KEY missing');
 
-  let rc_usd_per_ton: number | null = null;
-  const provider = (process.env.RC_PROVIDER || '').toLowerCase();
+    const [usd_eur, kc, rc] = await Promise.all([
+      fx(),
+      ndl('CHRIS/ICE_KC1', key), // USD per lb
+      ndl('CHRIS/ICE_RC1', key), // USD per metric ton
+    ]);
 
-  if (provider === 'ndl') {
-    rc_usd_per_ton = await rcFromNDL();
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      body: JSON.stringify({
+        usd_eur: usd_eur,              // number | null (USD→EUR)
+        kc_usd_per_lb: kc,            // Arabica
+        rc_usd_per_ton: rc            // Robusta
+      }),
+    };
+  } catch (e: any) {
+    return { statusCode: 500, body: JSON.stringify({ error: e.message ?? String(e) }) };
   }
-  if (rc_usd_per_ton == null) {
-    // Fallback Yahoo (nicht immer stabil)
-    const candidates = ['LRC=F', 'RC=F', 'COFFEE-RC=F'];
-    for (const sym of candidates) {
-      const v = await yahooLast(sym);
-      if (Number.isFinite(v)) { rc_usd_per_ton = Number(v); break; }
-    }
-  }
-
-  return {
-    statusCode: 200,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ usd_eur, kc_usd_per_lb, rc_usd_per_ton }),
-  };
 };
