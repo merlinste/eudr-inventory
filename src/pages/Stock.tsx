@@ -44,6 +44,12 @@ export default function Stock() {
 
   useEffect(() => { void load(); }, []);
 
+  async function loadPrices() {
+  const r = await fetch('/.netlify/functions/prices');
+  const j = (await r.json()) as Prices;
+  setPrices(j);
+}
+  
   async function load() {
     const [s, d, p, lp] = await Promise.all([
       supabase.from('v_green_stock').select('id, short_desc, origin_country, organic, status, received_kg, produced_kg, balance_kg').order('short_desc'),
