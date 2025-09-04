@@ -1,77 +1,119 @@
 // src/lib/pricing.ts
-// Zentrale Preis-Typen + Helfer. Einheitlich für Stock/LotDetail/etc.
+// Zentrale Preislogik + Fetcher (KC via Netlify-Proxy, FX via exchangerate.host)
 
 export type Prices = {
-  usd_eur: number | null;        // 1 USD in EUR
-  kc_usd_per_lb: number | null;  // Arabica (KC=F) in USD/lb
-  rc_usd_per_ton: number | null; // Robusta in USD/Metric Tonne (kann null sein)
+  usd_eur: number | null;        // USD -> EUR
+  kc_usd_per_lb: number | null;  // ICE Arabica Futures (US-$/lb)
+  rc_usd_per_ton: number | null; // ICE Robusta Futures (US-$/t) - optional, kann null sein
 };
 
-export type ContractOpt = { value: string; label: string; yyyymm: string };
-
-// Month-Codes und Zyklen
-const MONTH_CODES = ['F','G','H','J','K','M','N','Q','U','V','X','Z'];
-const KC_CYCLE = new Set(['H','K','N','U','Z']); // Mar, May, Jul, Sep, Dec
-const RC_CYCLE = new Set(['F','H','K','N','U','X']); // Jan, Mar, May, Jul, Sep, Nov
-
-/**
- * Nächste N Kontraktmonate (Label "MM/YYYY (KCZ5)" etc.)
- * species: 'arabica' | 'robusta' | 'other' (other -> Arabica-Zyklus)
- */
-export function futuresMonths(
-  species: 'arabica' | 'robusta' | 'other' = 'arabica',
-  count = 8
-): ContractOpt[] {
-  const useRCycle = species === 'robusta';
-  const res: ContractOpt[] = [];
-  const d = new Date();
-  d.setUTCDate(1);
-  while (res.length < count) {
-    const m = d.getUTCMonth();      // 0..11
-    const y = d.getUTCFullYear();   // z.B. 2025
-    const code = MONTH_CODES[m];
-    const ok = useRCycle ? RC_CYCLE.has(code) : KC_CYCLE.has(code);
-    if (ok) {
-      const sym = useRCycle ? 'RC' : 'KC';
-      const y1 = String(y).slice(-1);               // 2025 -> "5"
-      const codeStr = `${sym}${code}${y1}`;         // KCZ5 etc.
-      const mm = String(m + 1).padStart(2, '0');    // "12"
-      res.push({
-        value: codeStr,
-        label: `${mm}/${y} (${codeStr})`,
-        yyyymm: `${y}-${mm}`,
-      });
-    }
-    d.setUTCMonth(d.getUTCMonth() + 1);
-  }
-  return res;
+// ---------- Hilfsfunktionen (Formatierung) ----------
+export function fmtEurPerKg(n: number | null) {
+  if (n == null || !isFinite(n)) return '—';
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 2 })
+    .format(n);
 }
 
-// Zahlensafe
-const num = (v: unknown): number | null => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+export function round4(n: number) {
+  return Math.round(n * 10000) / 10000;
+}
+
+// ---------- Preisberechnung ----------
+type LotPriceArgs = {
+  species: 'arabica' | 'robusta' | 'other';
+  scheme: 'fixed_eur' | 'fixed_usd' | 'differential' | null;
+  // fixe Werte
+  fixed_eur_per_kg?: number | null;
+  fixed_usd_per_lb?: number | null;
+  // Differential
+  diff_cents_per_lb?: number | null; // Arabica (c/lb)
+  diff_usd_per_ton?: number | null;  // Robusta (USD/t)
 };
 
-/**
- * Holt Preise zentral. Erwartet eine Netlify-Function unter /.netlify/functions/prices,
- * liefert aber immer alle drei Keys zurück (fehlende Felder -> null), damit TS konsistent bleibt.
- */
-export async function fetchPrices(): Promise<Prices> {
-  try {
-    const r = await fetch('/.netlify/functions/prices', {
-      headers: { 'cache-control': 'no-cache' },
-    });
-    if (r.ok) {
-      const j: any = await r.json();
-      return {
-        usd_eur: num(j.usd_eur),
-        kc_usd_per_lb: num(j.kc_usd_per_lb),
-        rc_usd_per_ton: j.hasOwnProperty('rc_usd_per_ton') ? num(j.rc_usd_per_ton) : null,
-      };
-    }
-  } catch {
-    // ignore
+export function calcEurPerKgForLot(p: Prices, args: LotPriceArgs): number | null {
+  const fx = p.usd_eur ?? null;
+
+  // 1) Fix in EUR/kg
+  if (args.scheme === 'fixed_eur') {
+    return args.fixed_eur_per_kg ?? null;
   }
-  return { usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null };
+
+  // 2) Fix in USD/lb -> EUR/kg
+  if (args.scheme === 'fixed_usd') {
+    if (fx == null) return null;
+    if (args.fixed_usd_per_lb == null) return null;
+    // 1 lb = 0.45359237 kg  => USD/lb -> USD/kg
+    const usd_per_kg = args.fixed_usd_per_lb / 0.45359237;
+    return usd_per_kg * fx;
+  }
+
+  // 3) Differential
+  if (args.scheme === 'differential') {
+    if (args.species === 'arabica') {
+      // KC = USD/lb, Diff in c/lb
+      if (fx == null) return null;
+      if (p.kc_usd_per_lb == null) return null;
+      const kc_usd_per_lb = p.kc_usd_per_lb;
+      const diff_usd_per_lb = (args.diff_cents_per_lb ?? 0) / 100.0;
+      const usd_per_lb = kc_usd_per_lb + diff_usd_per_lb;
+      const usd_per_kg = usd_per_lb / 0.45359237;
+      return usd_per_kg * fx;
+    }
+    if (args.species === 'robusta') {
+      // RC = USD/t, Diff in USD/t
+      if (fx == null) return null;
+      if (p.rc_usd_per_ton == null) return null;
+      const usd_per_ton = p.rc_usd_per_ton + (args.diff_usd_per_ton ?? 0);
+      const usd_per_kg = usd_per_ton / 1000.0;
+      return usd_per_kg * fx;
+    }
+    return null;
+  }
+
+  return null;
+}
+
+// ---------- Fetch der Marktdaten ----------
+
+// FX: frei & CORS-freundlich
+async function fetchFx(): Promise<number | null> {
+  try {
+    const r = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=EUR');
+    if (!r.ok) return null;
+    const j = await r.json();
+    const v = j?.rates?.EUR;
+    return typeof v === 'number' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// KC: über Netlify Function (CORS-frei im Browser)
+async function fetchKC(): Promise<number | null> {
+  try {
+    const r = await fetch('/.netlify/functions/yahoo?symbol=KC=F');
+    if (!r.ok) return null;
+    const j = await r.json();
+    // unterstützt beide Varianten: {price: number} ODER {regularMarketPrice: number}
+    const v = typeof j?.price === 'number'
+      ? j.price
+      : (typeof j?.regularMarketPrice === 'number' ? j.regularMarketPrice : null);
+    return typeof v === 'number' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// RC: optional – hier bewusst erstmal null (später per NDL/TradingView etc.)
+async function fetchRC(): Promise<number | null> {
+  return null;
+}
+
+export async function fetchPrices(): Promise<Prices> {
+  const [usd_eur, kc, rc] = await Promise.all([fetchFx(), fetchKC(), fetchRC()]);
+  return {
+    usd_eur,
+    kc_usd_per_lb: kc,
+    rc_usd_per_ton: rc,
+  };
 }
