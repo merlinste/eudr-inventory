@@ -5,8 +5,15 @@ import { supabase } from '@/lib/supabaseClient';
 import { futuresMonths } from '@/lib/pricing';
 
 type Species = 'arabica' | 'robusta' | 'other';
-type LotStatus = 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null;
-type PriceScheme = 'fixed_eur'|'fixed_usd'|'differential'|null;
+type LotStatus =
+  | 'contracted'
+  | 'price_fixed'
+  | 'at_port'
+  | 'at_production_wh'
+  | 'produced'
+  | 'closed'
+  | null;
+type PriceScheme = 'fixed_eur' | 'fixed_usd' | 'differential' | null;
 
 type LotRow = {
   id: string;
@@ -19,49 +26,15 @@ type LotRow = {
   dds_reference?: string | null;
   external_contract_no?: string | null;
   price_scheme: PriceScheme;
-  price_fixed_eur_per_kg?: number | null;
-  price_fixed_usd_per_lb?: number | null;
-  price_diff_cents_per_lb?: number | null;
-  price_diff_usd_per_ton?: number | null;
-  price_base_contract?: string | null;
+  price_base_contract?: string | null; // z.B. "Z5"
 };
 
-type ContractOpt = { value: string; label: string; yyyymm: string };
-
-// Month code map: Jan..Dec -> F G H J K M N Q U V X Z
-const MONTH_CODES = ['F','G','H','J','K','M','N','Q','U','V','X','Z'];
-const KC_CYCLE = new Set(['H','K','N','U','Z']); // Mar, May, Jul, Sep, Dec
-const RC_CYCLE = new Set(['F','H','K','N','U','X']); // Jan, Mar, May, Jul, Sep, Nov
-const months = futuresMonths(form.species as any);
-
-function buildNextContracts(count: number, product: 'KC'|'RC'): ContractOpt[] {
-  const res: ContractOpt[] = [];
-  const d = new Date();
-  d.setUTCDate(1); // auf Monatsanfang
-  while (res.length < count) {
-    const m = d.getUTCMonth();                   // 0..11
-    const y = d.getUTCFullYear();               // 2025, ...
-    const code = MONTH_CODES[m];                // F..Z
-    const ok = product === 'RC' ? RC_CYCLE.has(code) : KC_CYCLE.has(code);
-    if (ok) {
-      const sym = product;
-      const y1 = String(y).slice(-1);           // 2025 -> "5"
-      const codeStr = `${sym}${code}${y1}`;     // z.B. KCZ5
-      const mm = String(m+1).padStart(2,'0');   // "12"
-      res.push({
-        value: codeStr,
-        label: `${mm}/${y} (${codeStr})`,
-        yyyymm: `${y}-${mm}`,
-      });
-    }
-    d.setUTCMonth(d.getUTCMonth() + 1);
-  }
-  return res;
-}
+type ContractOpt = { value: string; label: string };
 
 const COUNTRIES = [
-  // kurz gehalten – füge gerne weitere hinzu
-  'Brazil','Colombia','Peru','Ethiopia','Kenya','Guatemala','Honduras','India','Indonesia','Uganda','Tanzania','Vietnam','Mexico','Nicaragua','Rwanda','Burundi'
+  'Brazil','Colombia','Peru','Ethiopia','Kenya','Guatemala','Honduras',
+  'India','Indonesia','Uganda','Tanzania','Vietnam','Mexico','Nicaragua',
+  'Rwanda','Burundi'
 ];
 
 export default function Lots() {
@@ -69,10 +42,7 @@ export default function Lots() {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
 
-  // Formularzustand
-  const [species, setSpecies] = useState<Species>('arabica');
-  const [priceScheme, setPriceScheme] = useState<PriceScheme>('fixed_eur');
-
+  // Formularzustand (Single Source of Truth)
   const [form, setForm] = useState({
     short_desc: '',
     origin_country: 'Brazil',
@@ -81,22 +51,37 @@ export default function Lots() {
     status: 'contracted' as LotStatus,
     dds_reference: '',
     external_contract_no: '',
-    // Preisfelder
     price_scheme: 'fixed_eur' as PriceScheme,
     price_fixed_eur_per_kg: '' as string | number,
     price_fixed_usd_per_lb: '' as string | number,
-    price_diff_cents_per_lb: '' as string | number,
-    price_diff_usd_per_ton: '' as string | number,
-    price_base_contract: '' as string,
+    price_diff_cents_per_lb: '' as string | number,   // Arabica
+    price_diff_usd_per_ton: '' as string | number,    // Robusta
+    price_base_contract: '' as string                 // z.B. "Z5"
   });
 
-  // Kontraktliste abhängig von Spezies
+  // Optionen für Basis-Kontrakt aus pricing-lib
   const contractOptions = useMemo<ContractOpt[]>(
-    () => buildNextContracts(8, form.species === 'robusta' ? 'RC' : 'KC'),
+    () => {
+      const months = futuresMonths(form.species, new Date(), 8);
+      const sym = form.species === 'arabica' ? 'KC' : 'RC';
+      // Wir speichern nur den Monatscode (z.B. "Z5"); Anzeige mit Symbol:
+      return months.map(m => ({
+        value: m.code,                         // "Z5"
+        label: `${m.label} (${sym}${m.code})`  // "12/2025 (KCZ5)"
+      }));
+    },
     [form.species]
   );
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    // Beim Wechsel der Art ggf. Basis-Kontrakt vorbelegen
+    if (!form.price_base_contract) {
+      const first = contractOptions[0]?.value ?? '';
+      if (first) setForm(prev => ({ ...prev, price_base_contract: first }));
+    }
+  }, [contractOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function load() {
     setLoading(true);
@@ -104,11 +89,13 @@ export default function Lots() {
       .from('green_lots')
       .select('id, lot_no, short_desc, origin_country, organic, species, status, dds_reference, external_contract_no, price_scheme, price_base_contract')
       .order('created_at', { ascending: false });
+
     if (!error && data) setRows(data as LotRow[]);
     setLoading(false);
   }
 
   function resetForm() {
+    const first = contractOptions[0]?.value ?? '';
     setForm({
       short_desc: '',
       origin_country: 'Brazil',
@@ -122,16 +109,13 @@ export default function Lots() {
       price_fixed_usd_per_lb: '',
       price_diff_cents_per_lb: '',
       price_diff_usd_per_ton: '',
-      price_base_contract: contractOptions[0]?.value ?? '',
+      price_base_contract: first
     });
-    setSpecies('arabica');
-    setPriceScheme('fixed_eur');
   }
 
   async function submitNewLot(e: React.FormEvent) {
     e.preventDefault();
 
-    // Payload zusammenstellen – nur relevante Preisfelder mitsenden
     const payload: any = {
       short_desc: form.short_desc || null,
       origin_country: form.origin_country || null,
@@ -141,25 +125,27 @@ export default function Lots() {
       dds_reference: form.dds_reference || null,
       external_contract_no: form.external_contract_no || null,
       price_scheme: form.price_scheme,
-      price_base_contract: form.price_base_contract || null,
+      price_base_contract: form.price_base_contract || null
     };
 
+    // Nur passende Preisfelder setzen
     if (form.price_scheme === 'fixed_eur') {
-      payload.price_fixed_eur_per_kg = form.price_fixed_eur_per_kg ? Number(form.price_fixed_eur_per_kg) : null;
+      payload.price_fixed_eur_per_kg = form.price_fixed_eur_per_kg !== '' ? Number(form.price_fixed_eur_per_kg) : null;
       payload.price_fixed_usd_per_lb = null;
       payload.price_diff_cents_per_lb = null;
       payload.price_diff_usd_per_ton = null;
     } else if (form.price_scheme === 'fixed_usd') {
-      payload.price_fixed_usd_per_lb = form.price_fixed_usd_per_lb ? Number(form.price_fixed_usd_per_lb) : null;
+      payload.price_fixed_usd_per_lb = form.price_fixed_usd_per_lb !== '' ? Number(form.price_fixed_usd_per_lb) : null;
       payload.price_fixed_eur_per_kg = null;
       payload.price_diff_cents_per_lb = null;
       payload.price_diff_usd_per_ton = null;
     } else if (form.price_scheme === 'differential') {
+      // DB-Check verlangt: base_contract + passendes Diff-Feld
       if (form.species === 'arabica') {
-        payload.price_diff_cents_per_lb = form.price_diff_cents_per_lb ? Number(form.price_diff_cents_per_lb) : null;
+        payload.price_diff_cents_per_lb = form.price_diff_cents_per_lb !== '' ? Number(form.price_diff_cents_per_lb) : null;
         payload.price_diff_usd_per_ton = null;
       } else if (form.species === 'robusta') {
-        payload.price_diff_usd_per_ton = form.price_diff_usd_per_ton ? Number(form.price_diff_usd_per_ton) : null;
+        payload.price_diff_usd_per_ton = form.price_diff_usd_per_ton !== '' ? Number(form.price_diff_usd_per_ton) : null;
         payload.price_diff_cents_per_lb = null;
       }
       payload.price_fixed_eur_per_kg = null;
@@ -186,7 +172,13 @@ export default function Lots() {
   const filtered = rows.filter(r => {
     const s = (q || '').toLowerCase();
     if (!s) return true;
-    const hay = [r.lot_no, r.short_desc, r.origin_country, r.external_contract_no, r.dds_reference].join(' ').toLowerCase();
+    const hay = [
+      r.lot_no ?? '',
+      r.short_desc ?? '',
+      r.origin_country ?? '',
+      r.external_contract_no ?? '',
+      r.dds_reference ?? ''
+    ].join(' ').toLowerCase();
     return hay.includes(s);
   });
 
@@ -199,7 +191,7 @@ export default function Lots() {
         className="border rounded px-3 py-2 w-full"
         placeholder="Suche (Bezeichnung, Herkunft, DDS, Kontrakt)…"
         value={q}
-        onChange={e=>setQ(e.target.value)}
+        onChange={e => setQ(e.target.value)}
       />
 
       {/* Tabelle */}
@@ -223,7 +215,7 @@ export default function Lots() {
               <tr><td className="p-3" colSpan={9}>Lade…</td></tr>
             ) : filtered.length === 0 ? (
               <tr><td className="p-3" colSpan={9}>Keine Lots gefunden.</td></tr>
-            ) : filtered.map((r: LotRow) => (
+            ) : filtered.map((r) => (
               <tr key={r.id} className="border-b">
                 <td className="p-2 font-mono">{r.lot_no ?? '—'}</td>
                 <td className="p-2">
@@ -240,7 +232,7 @@ export default function Lots() {
                 <td className="p-2">
                   <div className="flex gap-2">
                     <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">Details</Link>
-                    <button className="text-red-600 hover:underline" onClick={()=>removeLot(r.id)}>Löschen</button>
+                    <button className="text-red-600 hover:underline" onClick={() => removeLot(r.id)}>Löschen</button>
                   </div>
                 </td>
               </tr>
@@ -256,27 +248,28 @@ export default function Lots() {
           <label>Bezeichnung
             <input className="border rounded px-3 py-2 w-full"
               value={form.short_desc}
-              onChange={e=>setForm({...form, short_desc: e.target.value})}/>
+              onChange={e => setForm(prev => ({ ...prev, short_desc: e.target.value }))}/>
           </label>
 
           <label>Herkunftsland
             <select className="border rounded px-3 py-2 w-full"
               value={form.origin_country ?? ''}
-              onChange={e=>setForm({...form, origin_country: e.target.value})}>
-              {COUNTRIES.map((c: string) => <option key={c} value={c}>{c}</option>)}
+              onChange={e => setForm(prev => ({ ...prev, origin_country: e.target.value }))}>
+              {COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
 
           <label>Art
             <select className="border rounded px-3 py-2 w-full"
               value={form.species}
-              onChange={e=>{
+              onChange={e => {
                 const sp = e.target.value as Species;
-                setForm({...form, species: sp});
-                setSpecies(sp);
-                // beim Wechsel gleich einen Basis‑Kontrakt vorbelegen
-                const first = buildNextContracts(8, sp === 'robusta' ? 'RC' : 'KC')[0]?.value ?? '';
-                setForm(prev => ({...prev, price_base_contract: first}));
+                const first = futuresMonths(sp, new Date(), 8)[0]?.code ?? '';
+                setForm(prev => ({
+                  ...prev,
+                  species: sp,
+                  price_base_contract: first || prev.price_base_contract
+                }));
               }}>
               <option value="arabica">Arabica</option>
               <option value="robusta">Robusta</option>
@@ -287,7 +280,7 @@ export default function Lots() {
           <label>Status
             <select className="border rounded px-3 py-2 w-full"
               value={form.status ?? 'contracted'}
-              onChange={e=>setForm({...form, status: e.target.value as LotStatus})}>
+              onChange={e => setForm(prev => ({ ...prev, status: e.target.value as LotStatus }))}>
               <option value="contracted">Kontrahiert</option>
               <option value="price_fixed">Preis fixiert</option>
               <option value="at_port">Im Hafen</option>
@@ -300,7 +293,7 @@ export default function Lots() {
           <label>Bio
             <select className="border rounded px-3 py-2 w-full"
               value={form.organic ? '1' : '0'}
-              onChange={e=>setForm({...form, organic: e.target.value === '1'})}>
+              onChange={e => setForm(prev => ({ ...prev, organic: e.target.value === '1' }))}>
               <option value="0">Nein</option>
               <option value="1">Ja</option>
             </select>
@@ -309,71 +302,67 @@ export default function Lots() {
           <label>DDS‑Referenz
             <input className="border rounded px-3 py-2 w-full"
               value={form.dds_reference}
-              onChange={e=>setForm({...form, dds_reference: e.target.value})}/>
+              onChange={e => setForm(prev => ({ ...prev, dds_reference: e.target.value }))}/>
           </label>
 
           <label>Kontraktnummer Importeur/Händler
             <input className="border rounded px-3 py-2 w-full"
               value={form.external_contract_no}
-              onChange={e=>setForm({...form, external_contract_no: e.target.value})}/>
+              onChange={e => setForm(prev => ({ ...prev, external_contract_no: e.target.value }))}/>
           </label>
 
-          {/* Preisschema */}
+          {/* Preisschema + Felder */}
           <div className="col-span-2 grid grid-cols-2 gap-3">
             <label>Preisschema
               <select className="border rounded px-3 py-2 w-full"
                 value={form.price_scheme ?? 'fixed_eur'}
-                onChange={e=>{
-                  const ps = e.target.value as PriceScheme;
-                  setForm({...form, price_scheme: ps});
-                  setPriceScheme(ps);
-                }}>
+                onChange={e => setForm(prev => ({ ...prev, price_scheme: e.target.value as PriceScheme }))}>
                 <option value="fixed_eur">Fixiert in EUR/kg</option>
                 <option value="fixed_usd">Fixiert in USD/lb</option>
                 <option value="differential">Differential</option>
               </select>
             </label>
 
-            {/* Basis‑Kontrakt (wird auch bei 'fixed_usd' gezeigt, falls du USD/lb fixierst) */}
+            {/* Basis‑Kontrakt */}
             <label>Basis‑Kontrakt (Monat)
               <select className="border rounded px-3 py-2 w-full"
                 value={form.price_base_contract ?? ''}
-                onChange={e=>setForm({...form, price_base_contract: e.target.value})}>
-                {contractOptions.map((m: ContractOpt) => (
+                onChange={e => setForm(prev => ({ ...prev, price_base_contract: e.target.value }))}>
+                {contractOptions.map(m => (
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
               </select>
             </label>
 
-            {priceScheme === 'fixed_eur' && (
+            {form.price_scheme === 'fixed_eur' && (
               <label>EUR/kg
                 <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
                   value={form.price_fixed_eur_per_kg}
-                  onChange={e=>setForm({...form, price_fixed_eur_per_kg: e.target.value})}/>
+                  onChange={e => setForm(prev => ({ ...prev, price_fixed_eur_per_kg: e.target.value }))}/>
               </label>
             )}
 
-            {priceScheme === 'fixed_usd' && (
+            {form.price_scheme === 'fixed_usd' && (
               <label>USD/lb
                 <input type="number" step="0.0001" className="border rounded px-3 py-2 w-full"
                   value={form.price_fixed_usd_per_lb}
-                  onChange={e=>setForm({...form, price_fixed_usd_per_lb: e.target.value})}/>
+                  onChange={e => setForm(prev => ({ ...prev, price_fixed_usd_per_lb: e.target.value }))}/>
               </label>
             )}
 
-            {priceScheme === 'differential' && form.species === 'arabica' && (
+            {form.price_scheme === 'differential' && form.species === 'arabica' && (
               <label>Diff. (c/lb, +/‑)
                 <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
                   value={form.price_diff_cents_per_lb}
-                  onChange={e=>setForm({...form, price_diff_cents_per_lb: e.target.value})}/>
+                  onChange={e => setForm(prev => ({ ...prev, price_diff_cents_per_lb: e.target.value }))}/>
               </label>
             )}
 
-            {priceScheme === 'differential' && form.species === 'robusta' && (
+            {form.price_scheme === 'differential' && form.species === 'robusta' && (
               <label>Diff. (USD/t, +/‑)
                 <input type="number" step="0.1" className="border rounded px-3 py-2 w-full"
                   value={form.price_diff_usd_per_ton}
-                  onChange={e=>setForm({...form, price_diff_usd_per_ton: e.target.value})}/>
+                  onChange={e => setForm(prev => ({ ...prev, price_diff_usd_per_ton: e.target.value }))}/>
               </label>
             )}
           </div>
