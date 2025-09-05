@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabaseClient';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { Feature, FeatureCollection, GeoJsonObject, Geometry } from 'geojson';
+import { fetchPrices, calcEurPerKgForLot, type Prices } from '@/lib/pricing';
 import { Prices, fetchPrices, calcEurPerKgForLot, fmtEurPerKg } from '@/lib/pricing';
 
 type Species = 'arabica'|'robusta'|'other';
