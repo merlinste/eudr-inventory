@@ -1,225 +1,132 @@
-// src/pages/LotDetail.tsx
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { supabase } from '@/lib/supabaseClient';
-import LotFiles from '@/components/LotFiles';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import type { Feature, FeatureCollection, Geometry, GeoJsonObject } from 'geojson';
-import { fetchPrices, calcEurPerKgForLot, type Prices } from '@/lib/pricing';
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { supabase } from '@/lib/supabaseClient'
+import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
+import { Prices, fetchPrices, calcEurPerKgForLot, fmtEurPerKg } from '@/lib/pricing'
 
 type Lot = {
-  id: string;
-  org_id: string;
-  lot_no: string | null;
-  short_desc: string | null;
-  external_contract_no: string | null;
-  dds_reference: string | null;
-  origin_country: string | null;
-  organic: boolean;
-  species: 'arabica'|'robusta'|'other'|null;
-  status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null;
-  price_scheme: 'fixed_eur'|'fixed_usd'|'differential'|null;
-  price_fixed_eur_per_kg: number | null;
-  price_fixed_usd_per_lb: number | null;
-  price_diff_cents_per_lb: number | null;
-};
-
-type Wh = { id: string; name: string };
-type WhBalance = { warehouse_id: string; warehouse_name: string; balance_kg: number };
+  id: string
+  org_id: string
+  lot_no: string | null
+  short_desc: string | null
+  origin_country: string | null
+  organic: boolean
+  species: 'arabica'|'robusta'|'other'|null
+  status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null
+  dds_reference: string | null
+  external_contract_no: string | null
+  price_scheme: 'fixed_eur'|'fixed_usd'|'differential'|null
+  price_fixed_eur_per_kg: number | null
+  price_fixed_usd_per_lb: number | null
+  price_diff_cents_per_lb: number | null
+  price_base_contract: string | null
+}
 
 export default function LotDetail() {
-  const { id } = useParams();
-  const navigate = useNavigate();
+  const { id } = useParams()
+  const navigate = useNavigate()
 
-  // Stammdaten
-  const [lot, setLot] = useState<Lot | null>(null);
-  const [shortDesc, setShortDesc] = useState('');
-  const [status, setStatus] = useState<Lot['status']>('contracted');
-  const [ddsRef, setDdsRef] = useState('');
-  const [extNo, setExtNo] = useState('');
+  const [lot, setLot] = useState<Lot | null>(null)
+  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null })
+  const [shortDesc, setShortDesc] = useState('')
+  const [status, setStatus] = useState<Lot['status']>('contracted')
+  const [dds, setDds] = useState('')
+  const [extNo, setExtNo] = useState('')
 
-  // Lager & Bestände
-  const [warehouses, setWarehouses] = useState<Wh[]>([]);
-  const [balances, setBalances] = useState<WhBalance[]>([]);
+  // Leaflet
+  const mapEl = useRef<HTMLDivElement | null>(null)
+  const mapRef = useRef<L.Map | null>(null)
+  const layerRef = useRef<L.GeoJSON | null>(null)
 
-  // Aufteilen
-  const [srcWh, setSrcWh] = useState('');
-  const [dstWh, setDstWh] = useState('');
-  const [moveKg, setMoveKg] = useState('');
-  const [newShort, setNewShort] = useState('');
+  useEffect(() => { if (id) void load(id) }, [id])
 
-  // Umlagern
-  const [tSrc, setTSrc] = useState('');
-  const [tDst, setTDst] = useState('');
-  const [tKg, setTKg] = useState('');
-
-  // Preise
-  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
-
-  // Karte
-  const mapElRef = useRef<HTMLDivElement|null>(null);
-  const mapRef = useRef<L.Map|null>(null);
-  const geoLayerRef = useRef<L.GeoJSON|null>(null);
-
-  useEffect(() => { if (id) void loadAll(id); }, [id]);
-
-  async function loadAll(lotId: string) {
-    const [lr, wh, bal] = await Promise.all([
-      supabase.from('green_lots').select('id, org_id, lot_no, short_desc, status, dds_reference, external_contract_no, species, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb').eq('id', lotId).single(),
-      supabase.from('v_my_warehouses').select('id,name').order('name'),
-      supabase.rpc('rpc_green_lot_balances', { p_lot_id: lotId })
-    ]);
-
-    if (!lr.error && lr.data) {
-      setLot(lr.data as any);
-      setShortDesc(lr.data.short_desc ?? '');
-      setStatus((lr.data.status ?? 'contracted') as any);
-      setDdsRef(lr.data.dds_reference ?? '');
-      setExtNo(lr.data.external_contract_no ?? '');
-      setNewShort(lr.data.short_desc ? `${lr.data.short_desc} (Teil)` : '');
-    }
-    if (!wh.error) setWarehouses((wh.data ?? []) as Wh[]);
-
-    if (!bal.error && Array.isArray(bal.data)) {
-      const rows = (bal.data as any[]).map(r => ({
-        warehouse_id: r.warehouse_id,
-        warehouse_name: r.name ?? r.warehouse_name ?? 'Lager',
-        balance_kg: Number(r.balance_kg ?? 0)
-      }));
-      setBalances(rows);
-      const firstWithStock = rows.find(r => r.balance_kg > 0);
-      if (firstWithStock) {
-        setSrcWh(prev => prev || firstWithStock.warehouse_id);
-        setTSrc(prev => prev || firstWithStock.warehouse_id);
-      }
-    }
-
-    initMapOnce();
-    await loadGeoJSON(lotId);
+  async function load(lotId: string) {
+    const { data, error } = await supabase.from('green_lots')
+      .select('id, org_id, lot_no, short_desc, origin_country, organic, species, status, dds_reference, external_contract_no, price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb, price_diff_cents_per_lb, price_base_contract')
+      .eq('id', lotId).single()
+    if (error) { alert(error.message); return }
+    setLot(data as Lot)
+    setShortDesc(data.short_desc ?? '')
+    setStatus((data.status ?? 'contracted') as Lot['status'])
+    setDds(data.dds_reference ?? '')
+    setExtNo(data.external_contract_no ?? '')
+    initMap()
+    await loadGeo(lotId)
   }
 
-  function initMapOnce() {
-    if (mapRef.current || !mapElRef.current) return;
-    const m = L.map(mapElRef.current, { center: [0,0], zoom: 2, worldCopyJump: true });
+  function initMap(){
+    if (mapRef.current || !mapEl.current) return
+    const m = L.map(mapEl.current, { center: [0,0], zoom: 2, worldCopyJump: true })
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(m);
-    const layer = L.geoJSON(undefined, {
-      onEachFeature: (feat, lyr) => {
-        const props = (feat.properties ?? {}) as Record<string, any>;
-        const label = props.name || props.id || '';
-        if (label) lyr.bindPopup(String(label));
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(m)
+    const g = L.geoJSON(undefined, {
+      onEachFeature: (f, l) => {
+        const name = (f.properties as any)?.name ?? ''
+        if (name) l.bindPopup(name)
       }
-    });
-    layer.addTo(m);
-    mapRef.current = m;
-    geoLayerRef.current = layer;
+    })
+    g.addTo(m)
+    mapRef.current = m
+    layerRef.current = g
   }
 
-  async function loadGeoJSON(lotId: string) {
-    try {
-      const res = await supabase.from('v_lot_plots_geojson').select('*').eq('green_lot_id', lotId);
-      const features: Feature<Geometry, any>[] = [];
-      if (!res.error && Array.isArray(res.data)) {
-        for (const row of res.data as any[]) {
-          const cand = row.geojson ?? row.feature ?? row.geom_geojson ?? row.geom ?? null;
-          if (!cand) continue;
-          const f = typeof cand === 'string' ? JSON.parse(cand) : cand;
-          if (f?.type === 'Feature') features.push(f as Feature<Geometry, any>);
-          else if (f?.type === 'FeatureCollection') features.push(...((f.features ?? []) as Feature<Geometry, any>[]));
-          else if (f?.type === 'Polygon' || f?.type === 'MultiPolygon') features.push({ type:'Feature', properties:{}, geometry:f });
-        }
+  async function loadGeo(lotId: string){
+    const res = await supabase.from('v_lot_plots_geojson')
+      .select('geojson, name').eq('green_lot_id', lotId)
+    if (res.error) return
+    const feats: any[] = []
+    for (const r of (res.data ?? [])) {
+      const g = typeof r.geojson === 'string' ? JSON.parse(r.geojson) : r.geojson
+      if (!g) continue
+      if (g.type === 'Feature') feats.push(g)
+      else if (g.type === 'FeatureCollection') feats.push(...(g.features ?? []))
+      else if (g.type === 'Polygon' || g.type === 'MultiPolygon') feats.push({ type:'Feature', properties:{ name:r.name }, geometry:g })
+    }
+    if (layerRef.current) {
+      layerRef.current.clearLayers()
+      if (feats.length) {
+        layerRef.current.addData({ type:'FeatureCollection', features: feats } as any)
+        try { mapRef.current?.fitBounds(layerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] }) } catch {}
       }
-      if (geoLayerRef.current) {
-        geoLayerRef.current.clearLayers();
-        if (features.length) {
-          const fc: FeatureCollection<Geometry, any> = { type:'FeatureCollection', features };
-          geoLayerRef.current.addData(fc as unknown as GeoJsonObject);
-          try { mapRef.current?.fitBounds(geoLayerRef.current.getBounds(), { maxZoom: 12, padding:[10,10] }); } catch {}
-        }
-      }
-    } catch (e) { console.error(e); }
+    }
   }
 
-  async function saveEdit() {
-    if (!id) return;
-    const upd = await supabase.from('green_lots').update({
+  async function save() {
+    if (!lot) return
+    const { error } = await supabase.from('green_lots').update({
       short_desc: shortDesc || null,
       status,
-      dds_reference: ddsRef || null,
+      dds_reference: dds || null,
       external_contract_no: extNo || null
-    }).eq('id', id);
-    if (upd.error) alert(upd.error.message); else alert('Gespeichert.');
-  }
-
-  const sourceOptions = useMemo(() => balances.filter(b => b.balance_kg > 0), [balances]);
-
-  async function doSplit() {
-    if (!id) return;
-    const kg = parseFloat(moveKg);
-    if (!srcWh || !dstWh || !isFinite(kg) || kg <= 0) { alert('Bitte Quelle, Ziel und kg angeben.'); return; }
-    const res = await supabase.rpc('safe_split_green_lot', {
-      p_source_id: id, p_src_warehouse_id: srcWh, p_dst_warehouse_id: dstWh,
-      p_move_kg: kg, p_new_short_desc: newShort || null
-    });
-    if (res.error) alert(res.error.message);
-    else { alert('Lot aufgeteilt.'); navigate('/lots'); }
-  }
-
-  async function doTransfer(all = false) {
-    if (!id) return;
-    if (!tSrc || !tDst) { alert('Bitte Quelle & Ziel wählen.'); return; }
-    if (tSrc === tDst) { alert('Quelle und Ziel müssen unterschiedlich sein.'); return; }
-    const kg = all ? null : (isFinite(parseFloat(tKg)) ? parseFloat(tKg) : null);
-    const res = await supabase.rpc('safe_transfer_green', {
-      p_lot_id: id, p_src_warehouse_id: tSrc, p_dst_warehouse_id: tDst, p_move_kg: kg
-    });
-    if (res.error) alert(res.error.message);
-    else { alert(`Umlagerung ok (${res.data} kg).`); await loadAll(id); }
-  }
-
-  async function onGeoJSONFile(e: React.ChangeEvent<HTMLInputElement>) {
-    if (!id) return;
-    const f = e.target.files?.[0]; e.target.value = ''; if (!f) return;
-    try {
-      const txt = await f.text();
-      const parsed = JSON.parse(txt);
-      const res = await supabase.rpc('import_lot_geojson', { p_lot_id: id, p_geojson: parsed });
-      if (res.error) throw res.error;
-      await loadGeoJSON(id);
-      alert(`${res.data ?? 0} Feature(s) importiert.`);
-    } catch (err: any) {
-      alert(err.message ?? String(err));
-    }
+    }).eq('id', lot.id)
+    if (error) alert(error.message); else alert('Gespeichert.')
   }
 
   async function refreshPrices() {
-    const p = await fetchPrices();
-    setPrices(p);
+    const p = await fetchPrices(lot?.price_base_contract ?? null)
+    setPrices(p)
   }
 
-  if (!lot) return <div className="p-4">Lade…</div>;
+  if (!lot) return <div>Lade…</div>
 
-  const eurKg = calcEurPerKgForLot(lot, prices);
+  const eurPerKg = calcEurPerKgForLot(lot, prices)
 
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-semibold">Lot‑Details</h2>
 
-      <div className="text-sm text-slate-600">
-        <span className="font-medium">Lot‑Nr.:</span> <span className="font-mono">{lot.lot_no ?? '—'}</span>
-      </div>
-
-      {/* Stammdaten */}
       <div className="border rounded p-4 space-y-3">
-        <h3 className="font-medium">Stammdaten bearbeiten</h3>
+        <div className="text-sm text-slate-600">
+          <span className="font-medium">Lot‑Nr.:</span> <span className="font-mono">{lot.lot_no ?? '—'}</span>
+        </div>
         <div className="grid grid-cols-2 gap-3 text-sm">
           <label>Kurzbeschreibung
             <input className="border rounded px-3 py-2 w-full" value={shortDesc} onChange={e=>setShortDesc(e.target.value)} />
           </label>
           <label>Status
-            <select className="border rounded px-3 py-2 w-full" value={status ?? 'contracted'} onChange={e=>setStatus(e.target.value as any)}>
+            <select className="border rounded px-3 py-2 w-full" value={status ?? 'contracted'} onChange={e=>setStatus(e.target.value as Lot['status'])}>
               <option value="contracted">Kontrahiert</option>
               <option value="price_fixed">Preis fixiert</option>
               <option value="at_port">Im Hafen</option>
@@ -229,117 +136,73 @@ export default function LotDetail() {
             </select>
           </label>
           <label>DDS‑Referenz
-            <input className="border rounded px-3 py-2 w-full" value={ddsRef} onChange={e=>setDdsRef(e.target.value)} />
+            <input className="border rounded px-3 py-2 w-full" value={dds} onChange={e=>setDds(e.target.value)} />
           </label>
           <label>Kontraktnummer Importeur/Händler
             <input className="border rounded px-3 py-2 w-full" value={extNo} onChange={e=>setExtNo(e.target.value)} />
           </label>
         </div>
-        <div className="text-xs text-slate-500">
-          Bestand je Lager:&nbsp;
-          {balances.length
-            ? balances.map(b => `${b.warehouse_name}: ${fmtKg(b.balance_kg)} kg`).join(' · ')
-            : '—'}
-        </div>
 
-        {/* Live‑Preis */}
-        <div className="mt-2 flex items-center gap-3 text-sm">
-          <button className="rounded bg-slate-800 text-white px-3 py-1.5" onClick={refreshPrices}>Preise aktualisieren</button>
-          <div className="text-slate-600">
-            USD→EUR: <b>{prices.usd_eur ?? '—'}</b> · KC (USD/lb): <b>{prices.kc_usd_per_lb ?? '—'}</b>
-            {eurKg != null && <> · <span className="ml-2">≈ <b>{fmtEur(eurKg)}</b> EUR/kg</span></>}
+        {/* Preisblock (Preview) */}
+        <div className="mt-2 text-sm">
+          <div className="mb-2 text-slate-600">
+            Preisvorschau: <span className="font-medium">{fmtEurPerKg(eurPerKg)}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="rounded bg-slate-200 px-3 py-2 text-sm" onClick={refreshPrices}>Marktdaten aktualisieren</button>
+            <div className="text-xs text-slate-500">
+              USD→EUR: {prices.usd_eur ?? '—'} · KC (USD/lb): {prices.kc_usd_per_lb ?? '—'}
+            </div>
           </div>
         </div>
 
         <div className="flex justify-end">
-          <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={saveEdit}>Speichern</button>
+          <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={save}>Speichern</button>
         </div>
       </div>
 
-      {/* Dateien – HIER eingefügt */}
-      {lot?.org_id && (
-        <LotFiles lotId={id!} orgId={lot.org_id} />
+      {/* Dateien – UI-Hook (siehe Storage-Abschnitt unten) */}
+      {lot.org_id && (
+        <div className="border rounded p-4">
+          <h3 className="font-medium mb-2">Dateien</h3>
+          <LotFiles lotId={lot.id} orgId={lot.org_id} />
+        </div>
       )}
 
-      {/* Aufteilen (neues Lot) */}
-      <div className="border rounded p-4 space-y-3">
-        <h3 className="font-medium">Lot aufteilen (neues Lot erzeugen)</h3>
-        <div className="grid grid-cols-4 gap-3 text-sm">
-          <label>Quelle
-            <select className="border rounded px-3 py-2 w-full" value={srcWh} onChange={e=>setSrcWh(e.target.value)}>
-              <option value="">— wählen —</option>
-              {sourceOptions.map(w => (
-                <option key={w.warehouse_id} value={w.warehouse_id}>
-                  {w.warehouse_name} — {fmtKg(w.balance_kg)} kg
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>Ziel
-            <select className="border rounded px-3 py-2 w-full" value={dstWh} onChange={e=>setDstWh(e.target.value)}>
-              <option value="">— wählen —</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
-          </label>
-          <label>Menge (kg)
-            <input type="number" step="0.01" className="border rounded px-3 py-2 w-full" value={moveKg} onChange={e=>setMoveKg(e.target.value)} />
-          </label>
-          <label>Neue Bezeichnung (optional)
-            <input className="border rounded px-3 py-2 w-full" value={newShort} onChange={e=>setNewShort(e.target.value)} />
-          </label>
-        </div>
-        <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={doSplit}>Aufteilen</button>
-      </div>
-
-      {/* Umlagern */}
-      <div className="border rounded p-4 space-y-3">
-        <h3 className="font-medium">Umlagern (ohne neues Lot)</h3>
-        <div className="grid grid-cols-4 gap-3 text-sm">
-          <label>Quelle
-            <select className="border rounded px-3 py-2 w-full" value={tSrc} onChange={e=>setTSrc(e.target.value)}>
-              <option value="">— wählen —</option>
-              {sourceOptions.map(w => (
-                <option key={w.warehouse_id} value={w.warehouse_id}>
-                  {w.warehouse_name} — {fmtKg(w.balance_kg)} kg
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>Ziel
-            <select className="border rounded px-3 py-2 w-full" value={tDst} onChange={e=>setTDst(e.target.value)}>
-              <option value="">— wählen —</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
-          </label>
-          <label>Menge (kg)
-            <input type="number" step="0.01" className="border rounded px-3 py-2 w-full"
-                   value={tKg} onChange={e=>setTKg(e.target.value)} />
-          </label>
-          <div className="flex items-end">
-            <button className="rounded bg-slate-200 px-3 py-2 text-sm" type="button" onClick={()=>doTransfer(true)}>
-              Alles umlagern
-            </button>
-          </div>
-        </div>
-        <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={()=>doTransfer(false)}>Umlagern</button>
-      </div>
-
-      {/* Karte + GeoJSON Upload */}
+      {/* Karte */}
       <div className="border rounded p-4 space-y-3">
         <h3 className="font-medium">Karte & Plots (GeoJSON)</h3>
-        <div className="flex items-center gap-3">
-          <input type="file" accept=".json,.geojson,application/geo+json,application/json" onChange={onGeoJSONFile}/>
-          <span className="text-xs text-slate-500">Feature/FeatureCollection; WGS84.</span>
-        </div>
-        <div ref={mapElRef} className="h-[460px] w-full border rounded" />
+        <div className="text-xs text-slate-500">Feature/FeatureCollection; WGS84.</div>
+        <input type="file" accept=".json,.geojson,application/geo+json,application/json"
+               onChange={onFile} />
+        <div ref={mapEl} className="h-[460px] w-full border rounded" />
       </div>
     </div>
-  );
+  )
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>){
+    const f = e.target.files?.[0]; if (!f || !lot) return
+    try{
+      const txt = await f.text()
+      const parsed = JSON.parse(txt)
+      const { error, data } = await supabase.rpc('import_lot_geojson', { p_lot_id: lot.id, p_geojson: parsed })
+      if (error) throw error
+      await loadGeo(lot.id)
+      alert(`${data ?? 0} Feature(s) importiert.`)
+    }catch(err:any){
+      alert(err.message ?? String(err))
+    }finally{
+      e.target.value = ''
+    }
+  }
 }
 
-function fmtKg(n: number) {
-  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(n);
-}
-function fmtEur(n: number) {
-  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 4 }).format(n);
+/** Minimaler Datei-Bereich; echte Upload-Funktion unten freischalten, wenn Storage aktiv ist */
+function LotFiles({ lotId, orgId }:{ lotId:string, orgId:string }){
+  // Platzhalter bis Storage-Bucket steht
+  return (
+    <div className="text-sm text-slate-500">
+      Datei‑Uploads aktivieren: siehe Abschnitt „Storage aktivieren“ weiter unten.
+    </div>
+  )
 }
