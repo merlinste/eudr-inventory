@@ -21,6 +21,7 @@ export default function Shell() {
           <NavLink to="/lots" className={({isActive})=>isActive?'font-medium':''}>Lots</NavLink>
           <NavLink to="/productions" className={({isActive})=>isActive?'font-medium':''}>Produktionen</NavLink>
           <NavLink to="/eudr" className={({isActive})=>isActive?'font-medium':''}>EUDR</NavLink>
+          <NavLink to="/archive" className={linkClass}>Archiv</NavLink>
           <NavLink to="/partners" className={({isActive})=>isActive?'font-medium':''}>Partner</NavLink>
           <NavLink to="/warehouses" className={({isActive})=>isActive?'font-medium':''}>Läger</NavLink>
           <NavLink to="/products" className={({isActive})=>isActive?'font-medium':''}>Produkte</NavLink>
