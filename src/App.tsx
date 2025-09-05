@@ -15,6 +15,7 @@ import Warehouses from '@/pages/Warehouses'
 import Products from '@/pages/Products'
 import AdminUsers from '@/pages/AdminUsers'
 import Account from '@/pages/Account'
+import Archive from '@/pages/Archive';
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/productions" element={<Productions />} />
           <Route path="/partners" element={<Partners />} />
           <Route path="/eudr" element={<Eudr />} />
+          <Route path="/archive" element={<Archive />} />
           <Route path="/warehouses" element={<Warehouses />} />
           <Route path="/products" element={<Products />} />
           <Route path="/admin/users" element={<AdminUsers />} />
