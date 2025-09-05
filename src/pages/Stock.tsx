@@ -86,6 +86,7 @@ export default function Stock() {
           price_diff_cents_per_lb, price_diff_usd_per_ton
         `
         )
+        .eq('archived', false)
         .order('created_at', { ascending: false }),
       supabase.from('v_green_stock').select('id, received_kg, produced_kg, balance_kg'),
       supabase
