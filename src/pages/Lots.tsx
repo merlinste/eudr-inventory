@@ -93,6 +93,7 @@ export default function Lots() {
     const [lots, wh] = await Promise.all([
       supabase.from('green_lots')
         .select('id, lot_no, short_desc, origin_country, organic, species, status, dds_reference, external_contract_no, price_scheme, price_base_contract')
+        .eq('archived', false)
         .order('created_at', { ascending: false }),
       supabase.from('v_my_warehouses').select('id,name').order('name')
     ])
