@@ -181,6 +181,12 @@ export default function Lots() {
     resetForm()
     await load()
     alert('Neues Lot angelegt.')
+    
+    }
+  async function archiveLot(id: string) {
+    if (!confirm('Lot ins Archiv verschieben?')) return;
+    const { error } = await supabase.from('green_lots').update({ archived: true }).eq('id', id);
+    if (error) alert(error.message); else load();
   }
 
   async function removeLot(id: string) {
@@ -247,6 +253,7 @@ export default function Lots() {
                   <div className="flex gap-2">
                     <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">Details</Link>
                     <button className="text-red-600 hover:underline" onClick={()=>removeLot(r.id)}>Löschen</button>
+                    <button className="text-slate-500 hover:underline" onClick={()=>archiveLot(r.id)}>Archivieren</button>
                   </div>
                 </td>
               </tr>
