@@ -4,7 +4,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
 
 const baseItem = 'block px-3 py-2 rounded transition-colors';
-const makeLinkClass = ({ isActive }: { isActive: boolean }) =>
+const link = ({ isActive }: { isActive: boolean }) =>
   `${baseItem} ${isActive ? 'bg-slate-100 text-slate-900 font-medium' : 'text-slate-600 hover:bg-slate-50'}`;
 
 export default function Shell() {
@@ -12,12 +12,8 @@ export default function Shell() {
   const [email, setEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    // initiale Mail laden
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
-    // und auf Auth-Änderungen reagieren
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setEmail(session?.user?.email ?? null);
-    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setEmail(s?.user?.email ?? null));
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -28,41 +24,36 @@ export default function Shell() {
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Header */}
-      <div className="border-b">
+      <header className="border-b">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
-          <div className="text-slate-900 font-semibold">earlybird · inventory</div>
+          <div className="flex items-center gap-3">
+            <img src="/logo-earlybird.svg" alt="earlybird" className="h-6 w-auto" />
+            <span className="text-slate-900 font-semibold">inventory</span>
+          </div>
           <div className="flex items-center gap-3 text-sm text-slate-600">
-            {email && (
-              <span>
-                Angemeldet als <span className="font-medium">{email}</span>
-              </span>
-            )}
-            <button onClick={logout} className="rounded bg-slate-800 text-white px-3 py-1.5">
-              Logout
-            </button>
+            {email && <>Angemeldet als <span className="font-medium">{email}</span></>}
+            <button onClick={logout} className="rounded bg-slate-800 text-white px-3 py-1.5">Logout</button>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Body */}
       <div className="mx-auto max-w-7xl grid grid-cols-[220px_1fr] gap-6 px-4 py-6">
         <aside className="border-r pr-4">
           <nav className="flex flex-col gap-1 text-sm">
-            <NavLink to="/stock" className={makeLinkClass}>Bestand</NavLink>
-            <NavLink to="/lots" className={makeLinkClass}>Lots</NavLink>
-            <NavLink to="/productions" className={makeLinkClass}>Produktionen</NavLink>
-            <NavLink to="/eudr" className={makeLinkClass}>EUDR</NavLink>
-            <NavLink to="/partners" className={makeLinkClass}>Partner</NavLink>
-            <NavLink to="/warehouses" className={makeLinkClass}>Läger</NavLink>
-            <NavLink to="/products" className={makeLinkClass}>Produkte</NavLink>
+            <NavLink to="/stock" className={link}>Bestand</NavLink>
+            <NavLink to="/lots" className={link}>Lots</NavLink>
+            <NavLink to="/productions" className={link}>Produktionen</NavLink>
+            <NavLink to="/eudr" className={link}>EUDR</NavLink>
+            <NavLink to="/partners" className={link}>Partner</NavLink>
+            <NavLink to="/warehouses" className={link}>Läger</NavLink>
+            <NavLink to="/products" className={link}>Produkte</NavLink>
             <div className="h-4" />
-            <NavLink to="/archive" className={makeLinkClass}>Archiv</NavLink>
-            <NavLink to="/admin/users" className={makeLinkClass}>Admin</NavLink>
+            <NavLink to="/archive" className={link}>Archiv</NavLink>
+            <NavLink to="/admin/users" className={link}>Admin</NavLink>
           </nav>
         </aside>
 
-        <main className="pb-20">
+        <main className="pb-24">
           <Outlet />
         </main>
       </div>
