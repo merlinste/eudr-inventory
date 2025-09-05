@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
+import { fetchPrices, calcEurPerKgForLot, type Prices } from '@/lib/pricing';
 import {
   Prices,
   fetchPrices,
