@@ -3,272 +3,171 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
 import { fetchPrices, calcEurPerKgForLot, type Prices } from '@/lib/pricing';
-import {
-  Prices,
-  fetchPrices,
-  calcEurPerKgForLot,
-  fmtEurPerKg,
-} from '@/lib/pricing';
 
-type Species = 'arabica' | 'robusta' | 'other';
-type LotStatus =
-  | 'contracted'
-  | 'price_fixed'
-  | 'at_port'
-  | 'at_production_wh'
-  | 'produced'
-  | 'closed'
-  | null;
-type PriceScheme = 'fixed_eur' | 'fixed_usd' | 'differential' | null;
+type Species = 'arabica' | 'robusta' | 'other' | null;
+type LotStatus = 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null;
+type PriceScheme = 'fixed_eur'|'fixed_usd'|'differential'|null;
 
-type LotRow = {
+type Row = {
   id: string;
+  lot_no?: string | null;
   short_desc: string | null;
   origin_country: string | null;
   organic: boolean;
-  status: LotStatus;
   species: Species;
-  // Preisfelder (für die Berechnung notwendig)
+  status: LotStatus;
+
+  // Mengen
+  received_kg: number;
+  produced_kg: number;
+  balance_kg: number;
+
+  // Preise (aus green_lots)
   price_scheme: PriceScheme;
   price_fixed_eur_per_kg: number | null;
   price_fixed_usd_per_lb: number | null;
   price_diff_cents_per_lb: number | null;
-  price_diff_usd_per_ton: number | null;
-};
-
-type AggRow = {
-  id: string; // v_green_stock.id == green_lot_id
-  received_kg: number | null;
-  produced_kg: number | null;
-  balance_kg: number | null;
-};
-
-type DetRow = {
-  green_lot_id: string;
-  warehouse_id: string;
-  warehouse_name: string;
-  balance_kg: number;
+  price_base_contract?: string | null;
 };
 
 export default function Stock() {
-  // ---------------- state ----------------
-  const [lots, setLots] = useState<LotRow[]>([]);
-  const [agg, setAgg] = useState<Record<string, AggRow>>({});
-  const [det, setDet] = useState<Record<string, DetRow[]>>({});
+  const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
-
-  const [prices, setPrices] = useState<Prices>({
-    usd_eur: null,
-    kc_usd_per_lb: null,
-    rc_usd_per_ton: null,
-  });
-
-  // ---------------- effects ----------------
-  useEffect(() => {
-    void loadAll();
-  }, []);
+  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
 
   useEffect(() => {
-    void refreshMarket();
+    void loadRows();
+    void refreshPrices();
   }, []);
 
-  // ---------------- data loading ----------------
-  async function loadAll() {
+  async function loadRows() {
     setLoading(true);
+    // ⬇️ Falls dein View anders heißt, hier anpassen:
+    const { data, error } = await supabase
+      .from('v_green_stock')
+      .select(
+        [
+          'id',
+          'lot_no',
+          'short_desc',
+          'origin_country',
+          'organic',
+          'species',
+          'status',
+          'received_kg',
+          'produced_kg',
+          'balance_kg',
+          'price_scheme',
+          'price_fixed_eur_per_kg',
+          'price_fixed_usd_per_lb',
+          'price_diff_cents_per_lb',
+          'price_base_contract',
+        ].join(',')
+      )
+      .order('short_desc', { ascending: true });
 
-    const [lotsRes, aggRes, detRes] = await Promise.all([
-      supabase
-        .from('green_lots')
-        .select(
-          `
-          id, short_desc, origin_country, organic, status, species,
-          price_scheme, price_fixed_eur_per_kg, price_fixed_usd_per_lb,
-          price_diff_cents_per_lb, price_diff_usd_per_ton
-        `
-        )
-        .eq('archived', false)
-        .order('created_at', { ascending: false }),
-      supabase.from('v_green_stock').select('id, received_kg, produced_kg, balance_kg'),
-      supabase
-        .from('v_green_stock_detailed')
-        .select('green_lot_id, warehouse_id, warehouse_name, balance_kg'),
-    ]);
-
-    if (!lotsRes.error && lotsRes.data) {
-      setLots(lotsRes.data as LotRow[]);
+    if (!error && data) {
+      // Standard-Filter: geschlossene Lots ausblenden (nur operativer Bestand)
+      const list = (data as any[]).filter(r => r.status !== 'closed');
+      setRows(list as Row[]);
+    } else if (error) {
+      alert(error.message);
     }
-
-    if (!aggRes.error && aggRes.data) {
-      const map: Record<string, AggRow> = {};
-      for (const r of aggRes.data as any[]) {
-        map[String(r.id)] = {
-          id: String(r.id),
-          received_kg: Number(r.received_kg ?? 0),
-          produced_kg: Number(r.produced_kg ?? 0),
-          balance_kg: Number(r.balance_kg ?? 0),
-        };
-      }
-      setAgg(map);
-    }
-
-    if (!detRes.error && detRes.data) {
-      const map: Record<string, DetRow[]> = {};
-      for (const r of detRes.data as any[]) {
-        const gid = String(r.green_lot_id);
-        (map[gid] ||= []).push({
-          green_lot_id: gid,
-          warehouse_id: String(r.warehouse_id),
-          warehouse_name: String(r.warehouse_name ?? 'Lager'),
-          balance_kg: Number(r.balance_kg ?? 0),
-        });
-      }
-      // sortiere Lageranzeige konsistent
-      for (const k of Object.keys(map)) {
-        map[k].sort((a, b) => a.warehouse_name.localeCompare(b.warehouse_name));
-      }
-      setDet(map);
-    }
-
     setLoading(false);
   }
 
-  async function refreshMarket() {
+  async function refreshPrices() {
     const p = await fetchPrices();
     setPrices(p);
   }
 
-  // ---------------- derived ----------------
   const filtered = useMemo(() => {
-    const needle = (q || '').toLowerCase();
-    if (!needle) return lots;
-    return lots.filter((l) => {
-      const hay =
-        [l.short_desc, l.origin_country, l.status]
-          .map((x) => (x ?? '').toString().toLowerCase())
-          .join(' ');
-      return hay.includes(needle);
+    const s = q.trim().toLowerCase();
+    if (!s) return rows;
+    return rows.filter(r => {
+      const hay = [
+        r.lot_no ?? '',
+        r.short_desc ?? '',
+        r.origin_country ?? '',
+        r.price_base_contract ?? '',
+      ].join(' ').toLowerCase();
+      return hay.includes(s);
     });
-  }, [q, lots]);
-
-  // Hilfsanzeige für Lagerliste in einer Zelle
-  function renderWarehouses(lotId: string) {
-    const rows = det[lotId] || [];
-    if (!rows.length) return '—';
-    return (
-      <ul className="list-disc pl-4">
-        {rows.map((r) => (
-          <li key={r.warehouse_id}>
-            {r.warehouse_name}: {fmtInt(r.balance_kg)} kg
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  // Preis je Lot (in EUR/kg) – nutzt die importierte Utility
-  function lotEurPerKg(l: LotRow): number | null {
-    return calcEurPerKgForLot(prices, {
-      species: l.species,
-      scheme: l.price_scheme,
-      fixed_eur_per_kg: l.price_fixed_eur_per_kg,
-      fixed_usd_per_lb: l.price_fixed_usd_per_lb,
-      diff_cents_per_lb: l.price_diff_cents_per_lb,
-      diff_usd_per_ton: l.price_diff_usd_per_ton,
-    });
-  }
+  }, [rows, q]);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Bestand · Rohkaffee‑Lots</h2>
-        <button
-          className="px-3 py-2 rounded bg-slate-800 text-white text-sm"
-          onClick={refreshMarket}
-        >
-          Preise aktualisieren
-        </button>
+        <h2 className="text-lg font-semibold">Bestand (Rohkaffee)</h2>
+        <div className="flex items-center gap-3 text-sm">
+          <button className="rounded bg-slate-800 text-white px-3 py-1.5" onClick={refreshPrices}>
+            Marktdaten aktualisieren
+          </button>
+          <span className="text-slate-600">
+            USD→EUR: <b>{prices.usd_eur ?? '—'}</b> · KC (USD/lb): <b>{prices.kc_usd_per_lb ?? '—'}</b>
+          </span>
+        </div>
       </div>
 
       <input
         className="border rounded px-3 py-2 w-full"
-        placeholder="Suchen (Beschreibung, Herkunft)…"
+        placeholder="Suche (Lot‑Nr., Bezeichnung, Herkunft, Kontrakt)…"
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-
-      <div className="text-sm text-slate-600">
-        FX USD→EUR: {prices.usd_eur ?? '—'} · KC (USD/lb): {prices.kc_usd_per_lb ?? '—'} · RC (USD/t):{' '}
-        {prices.rc_usd_per_ton ?? '—'}
-      </div>
 
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="border-b bg-slate-50">
             <tr>
-              <th className="text-left p-2">Lot</th>
+              <th className="text-left p-2">Lot‑Nr.</th>
+              <th className="text-left p-2">Bezeichnung</th>
               <th className="text-left p-2">Herkunft</th>
               <th className="text-left p-2">Bio</th>
-              <th className="text-left p-2">Status</th>
-              <th className="text-left p-2">Lager</th>
+              <th className="text-left p-2">Art</th>
               <th className="text-right p-2">Erhalten (kg)</th>
               <th className="text-right p-2">Produziert (kg)</th>
-              <th className="text-right p-2">Verbleibend (kg)</th>
-              <th className="text-right p-2">Preis (EUR/kg)</th>
-              <th className="text-left p-2">Modus</th>
+              <th className="text-right p-2">Bestand (kg)</th>
+              <th className="text-left p-2">Preis</th>
+              <th className="text-left p-2">Kontrakt</th>
               <th className="text-left p-2">Aktion</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr>
-                <td colSpan={11} className="p-3">
-                  Lade…
-                </td>
-              </tr>
+              <tr><td className="p-3" colSpan={11}>Lade…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="p-3">
-                  Keine Lots gefunden.
-                </td>
-              </tr>
+              <tr><td className="p-3" colSpan={11}>Keine Lots gefunden.</td></tr>
             ) : (
-              filtered.map((l) => {
-                const a = agg[l.id];
-                const eurPerKg = lotEurPerKg(l);
-                const mode =
-                  l.price_scheme === 'differential' ? (
-                    <span className="inline-flex items-center gap-1 text-amber-700">
-                      <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-                      live
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-emerald-700">
-                      <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                      fix
-                    </span>
-                  );
+              filtered.map((r) => {
+                const eurKg = calcEurPerKgForLot(r, prices); // ✅ richtig: lot + prices
+                const badge =
+                  r.price_scheme === 'differential'
+                    ? <span className="ml-2 inline-block text-xs rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">Live</span>
+                    : <span className="ml-2 inline-block text-xs rounded bg-emerald-100 text-emerald-800 px-1.5 py-0.5">Fixiert</span>;
 
                 return (
-                  <tr key={l.id} className="border-b align-top">
+                  <tr key={r.id} className="border-b">
+                    <td className="p-2 font-mono">{r.lot_no ?? '—'}</td>
                     <td className="p-2">
-                      <Link to={`/lots/${l.id}`} className="text-blue-700 hover:underline">
-                        {l.short_desc ?? '—'}
+                      <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">
+                        {r.short_desc ?? '—'}
                       </Link>
                     </td>
-                    <td className="p-2">{l.origin_country ?? '—'}</td>
-                    <td className="p-2">{l.organic ? 'Ja' : 'Nein'}</td>
-                    <td className="p-2">{labelStatus(l.status)}</td>
-                    <td className="p-2">{renderWarehouses(l.id)}</td>
-                    <td className="p-2 text-right">{fmtInt(a?.received_kg ?? 0)}</td>
-                    <td className="p-2 text-right">{fmtInt(a?.produced_kg ?? 0)}</td>
-                    <td className="p-2 text-right">{fmtInt(a?.balance_kg ?? 0)}</td>
-                    <td className="p-2 text-right">{fmtEurPerKg(eurPerKg)}</td>
-                    <td className="p-2">{mode}</td>
+                    <td className="p-2">{r.origin_country ?? '—'}</td>
+                    <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
+                    <td className="p-2">{r.species ?? '—'}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtKg(r.received_kg)}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtKg(r.produced_kg)}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtKg(r.balance_kg)}</td>
                     <td className="p-2">
-                      <Link to={`/lots/${l.id}`} className="text-blue-700 hover:underline">
-                        Details
-                      </Link>
+                      {eurKg == null ? '—' : <span className="tabular-nums">{fmtEur(eurKg)}/kg</span>}
+                      {r.price_scheme ? badge : null}
+                    </td>
+                    <td className="p-2 font-mono">{r.price_base_contract ?? '—'}</td>
+                    <td className="p-2">
+                      <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">Details</Link>
                     </td>
                   </tr>
                 );
@@ -281,26 +180,9 @@ export default function Stock() {
   );
 }
 
-// --------- helpers ----------
-function fmtInt(n: number) {
-  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(n);
+function fmtKg(n: number) {
+  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(n ?? 0);
 }
-
-function labelStatus(s: LotStatus) {
-  switch (s) {
-    case 'contracted':
-      return 'Kontrahiert';
-    case 'price_fixed':
-      return 'Preis fixiert';
-    case 'at_port':
-      return 'Im Hafen';
-    case 'at_production_wh':
-      return 'Im Produktionslager';
-    case 'produced':
-      return 'Produziert';
-    case 'closed':
-      return 'Abgeschlossen';
-    default:
-      return '—';
-  }
+function fmtEur(n: number) {
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 4 }).format(n);
 }
