@@ -1,137 +1,94 @@
-// src/pages/Stock.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { supabase } from '@/lib/supabaseClient';
-import { fetchPrices, calcEurPerKgForLot, type Prices } from '@/lib/pricing';
-
-type Species = 'arabica' | 'robusta' | 'other' | null;
-type LotStatus = 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null;
-type PriceScheme = 'fixed_eur'|'fixed_usd'|'differential'|null;
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { supabase } from '@/lib/supabaseClient'
+import { Prices, fetchPrices, calcEurPerKgForLot, fmtEurPerKg } from '@/lib/pricing'
 
 type Row = {
-  id: string;
-  lot_no?: string | null;
-  short_desc: string | null;
-  origin_country: string | null;
-  organic: boolean;
-  species: Species;
-  status: LotStatus;
-
-  // Mengen
-  received_kg: number;
-  produced_kg: number;
-  balance_kg: number;
-
-  // Preise (aus green_lots)
-  price_scheme: PriceScheme;
-  price_fixed_eur_per_kg: number | null;
-  price_fixed_usd_per_lb: number | null;
-  price_diff_cents_per_lb: number | null;
-  price_base_contract?: string | null;
-};
+  id: string
+  lot_no: string | null
+  short_desc: string | null
+  origin_country: string | null
+  organic: boolean
+  species: 'arabica' | 'robusta' | 'other' | null
+  status: 'contracted'|'price_fixed'|'at_port'|'at_production_wh'|'produced'|'closed'|null
+  price_scheme: 'fixed_eur'|'fixed_usd'|'differential'|null
+  price_fixed_eur_per_kg: number | null
+  price_fixed_usd_per_lb: number | null
+  price_diff_cents_per_lb: number | null
+  price_base_contract: string | null
+  received_kg: number
+  produced_kg: number
+  balance_kg: number
+}
 
 export default function Stock() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState('');
-  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null, rc_usd_per_ton: null });
+  const [rows, setRows] = useState<Row[]>([])
+  const [loading, setLoading] = useState(true)
+  const [q, setQ] = useState('')
+  const [prices, setPrices] = useState<Prices>({ usd_eur: null, kc_usd_per_lb: null })
 
-  useEffect(() => {
-    void loadRows();
-    void refreshPrices();
-  }, []);
-
-  async function loadRows() {
-    setLoading(true);
-    // ⬇️ Falls dein View anders heißt, hier anpassen:
+  useEffect(() => { void load(); }, [])
+  async function load() {
+    setLoading(true)
     const { data, error } = await supabase
       .from('v_green_stock')
-      .select(
-        [
-          'id',
-          'lot_no',
-          'short_desc',
-          'origin_country',
-          'organic',
-          'species',
-          'status',
-          'received_kg',
-          'produced_kg',
-          'balance_kg',
-          'price_scheme',
-          'price_fixed_eur_per_kg',
-          'price_fixed_usd_per_lb',
-          'price_diff_cents_per_lb',
-          'price_base_contract',
-        ].join(',')
-      )
-      .order('short_desc', { ascending: true });
-
-    if (!error && data) {
-      // Standard-Filter: geschlossene Lots ausblenden (nur operativer Bestand)
-      const list = (data as any[]).filter(r => r.status !== 'closed');
-      setRows(list as Row[]);
-    } else if (error) {
-      alert(error.message);
-    }
-    setLoading(false);
+      .select('*')
+      .order('short_desc', { ascending: true })
+    if (!error && data) setRows(data as unknown as Row[])
+    setLoading(false)
   }
 
-  async function refreshPrices() {
-    const p = await fetchPrices();
-    setPrices(p);
+  async function refreshMarket() {
+    // Wenn viele Lots „differential“ haben, nimm den häufigsten Basis-Kontrakt als Hint
+    const hint = rows.find(r => r.price_scheme === 'differential')?.price_base_contract ?? null
+    const p = await fetchPrices(hint)
+    setPrices(p)
+    alert(`Marktdaten aktualisiert.\nUSD→EUR: ${p.usd_eur ?? '—'}\nKC (USD/lb): ${p.kc_usd_per_lb ?? '—'}`)
   }
 
   const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return rows;
-    return rows.filter(r => {
-      const hay = [
-        r.lot_no ?? '',
-        r.short_desc ?? '',
-        r.origin_country ?? '',
-        r.price_base_contract ?? '',
-      ].join(' ').toLowerCase();
-      return hay.includes(s);
-    });
-  }, [rows, q]);
+    const s = q.trim().toLowerCase()
+    if (!s) return rows
+    return rows.filter(r =>
+      [r.lot_no, r.short_desc, r.origin_country].join(' ').toLowerCase().includes(s)
+    )
+  }, [q, rows])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Bestand (Rohkaffee)</h2>
-        <div className="flex items-center gap-3 text-sm">
-          <button className="rounded bg-slate-800 text-white px-3 py-1.5" onClick={refreshPrices}>
-            Marktdaten aktualisieren
-          </button>
-          <span className="text-slate-600">
-            USD→EUR: <b>{prices.usd_eur ?? '—'}</b> · KC (USD/lb): <b>{prices.kc_usd_per_lb ?? '—'}</b>
-          </span>
-        </div>
+        <h2 className="text-lg font-semibold">Bestand · Rohkaffee‑Lots</h2>
+        <button className="rounded bg-slate-800 text-white text-sm px-3 py-2" onClick={refreshMarket}>
+          Marktdaten aktualisieren
+        </button>
+      </div>
+
+      <div className="text-xs text-slate-500">
+        USD→EUR: {prices.usd_eur ?? '—'} · KC (USD/lb): {prices.kc_usd_per_lb ?? '—'}
       </div>
 
       <input
         className="border rounded px-3 py-2 w-full"
-        placeholder="Suche (Lot‑Nr., Bezeichnung, Herkunft, Kontrakt)…"
+        placeholder="Suchen (Bezeichnung, Herkunft)…"
         value={q}
-        onChange={(e) => setQ(e.target.value)}
+        onChange={e=>setQ(e.target.value)}
       />
 
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="border-b bg-slate-50">
             <tr>
-              <th className="text-left p-2">Lot‑Nr.</th>
-              <th className="text-left p-2">Bezeichnung</th>
-              <th className="text-left p-2">Herkunft</th>
-              <th className="text-left p-2">Bio</th>
-              <th className="text-left p-2">Art</th>
-              <th className="text-right p-2">Erhalten (kg)</th>
-              <th className="text-right p-2">Produziert (kg)</th>
-              <th className="text-right p-2">Bestand (kg)</th>
-              <th className="text-left p-2">Preis</th>
-              <th className="text-left p-2">Kontrakt</th>
-              <th className="text-left p-2">Aktion</th>
+              <th className="p-2 text-left">Lot</th>
+              <th className="p-2 text-left">Herkunft</th>
+              <th className="p-2 text-left">Bio</th>
+              <th className="p-2 text-left">Status</th>
+              <th className="p-2 text-left">Lager</th>
+              <th className="p-2 text-right">Erhalten (kg)</th>
+              <th className="p-2 text-right">Produziert (kg)</th>
+              <th className="p-2 text-right">Verbleibend (kg)</th>
+              <th className="p-2 text-right">Preis (EUR/kg)</th>
+              <th className="p-2 text-left">Modus</th>
+              <th className="p-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -139,50 +96,52 @@ export default function Stock() {
               <tr><td className="p-3" colSpan={11}>Lade…</td></tr>
             ) : filtered.length === 0 ? (
               <tr><td className="p-3" colSpan={11}>Keine Lots gefunden.</td></tr>
-            ) : (
-              filtered.map((r) => {
-                const eurKg = calcEurPerKgForLot(r, prices); // ✅ richtig: lot + prices
-                const badge =
-                  r.price_scheme === 'differential'
-                    ? <span className="ml-2 inline-block text-xs rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">Live</span>
-                    : <span className="ml-2 inline-block text-xs rounded bg-emerald-100 text-emerald-800 px-1.5 py-0.5">Fixiert</span>;
-
-                return (
-                  <tr key={r.id} className="border-b">
-                    <td className="p-2 font-mono">{r.lot_no ?? '—'}</td>
-                    <td className="p-2">
-                      <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">
+            ) : filtered.map(r => {
+              const eurPerKg = calcEurPerKgForLot(r, prices)
+              return (
+                <tr key={r.id} className="border-b align-top">
+                  <td className="p-2">
+                    <div className="font-medium">
+                      <Link className="text-blue-700 hover:underline" to={`/lots/${r.id}`}>
                         {r.short_desc ?? '—'}
                       </Link>
-                    </td>
-                    <td className="p-2">{r.origin_country ?? '—'}</td>
-                    <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
-                    <td className="p-2">{r.species ?? '—'}</td>
-                    <td className="p-2 text-right tabular-nums">{fmtKg(r.received_kg)}</td>
-                    <td className="p-2 text-right tabular-nums">{fmtKg(r.produced_kg)}</td>
-                    <td className="p-2 text-right tabular-nums">{fmtKg(r.balance_kg)}</td>
-                    <td className="p-2">
-                      {eurKg == null ? '—' : <span className="tabular-nums">{fmtEur(eurKg)}/kg</span>}
-                      {r.price_scheme ? badge : null}
-                    </td>
-                    <td className="p-2 font-mono">{r.price_base_contract ?? '—'}</td>
-                    <td className="p-2">
-                      <Link to={`/lots/${r.id}`} className="text-blue-700 hover:underline">Details</Link>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
+                    </div>
+                    <div className="text-xs text-slate-500">{r.lot_no ?? '—'}</div>
+                  </td>
+                  <td className="p-2">{r.origin_country ?? '—'}</td>
+                  <td className="p-2">{r.organic ? 'Ja' : 'Nein'}</td>
+                  <td className="p-2">{labelStatus(r.status)}</td>
+                  <td className="p-2">
+                    {/* optional: je-Lager-Auflistung kannst du später aus v_green_stock_detailed ziehen */}
+                    —
+                  </td>
+                  <td className="p-2 text-right">{fmt(r.received_kg)}</td>
+                  <td className="p-2 text-right">{fmt(r.produced_kg)}</td>
+                  <td className="p-2 text-right">{fmt(r.balance_kg)}</td>
+                  <td className="p-2 text-right">{fmtEurPerKg(eurPerKg)}</td>
+                  <td className="p-2">{r.price_scheme === 'differential' ? <BadgeLive/> : <BadgeFixed/>}</td>
+                  <td className="p-2"><Link className="text-blue-700 hover:underline" to={`/lots/${r.id}`}>Details</Link></td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
     </div>
-  );
+  )
 }
 
-function fmtKg(n: number) {
-  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(n ?? 0);
+function fmt(n: number){ return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(n) }
+function labelStatus(s: Row['status']) {
+  switch(s){
+    case 'contracted': return 'Kontrahiert'
+    case 'price_fixed': return 'Preis fixiert'
+    case 'at_port': return 'Im Hafen'
+    case 'at_production_wh': return 'Im Produktionslager'
+    case 'produced': return 'Produziert'
+    case 'closed': return 'Abgeschlossen'
+    default: return '—'
+  }
 }
-function fmtEur(n: number) {
-  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 4 }).format(n);
-}
+function BadgeLive(){ return <span className="inline-flex items-center gap-1 text-xs text-amber-700"><span className="h-2 w-2 rounded-full bg-amber-500 inline-block"/>live</span> }
+function BadgeFixed(){ return <span className="inline-flex items-center gap-1 text-xs text-emerald-700"><span className="h-2 w-2 rounded-full bg-emerald-500 inline-block"/>fix</span> }
