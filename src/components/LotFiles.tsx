@@ -16,33 +16,65 @@ export default function LotFiles({ lotId, orgId }: { lotId: string; orgId: strin
       .order('created_at', { ascending: false });
     if (!error && data) setRows(data as any);
   }
-  useEffect(() => { if (lotId) load(); }, [lotId]);
+  useEffect(() => { if (lotId) void load(); }, [lotId]);
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; e.target.value = ''; if (!file) return;
     setBusy(true);
-    const key = `org/${orgId}/green_lots/${lotId}/${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
-    const up = await supabase.storage.from('attachments').upload(key, file, { contentType: file.type });
-    if (up.error) { alert(up.error.message); setBusy(false); return; }
+    try {
+      // 1) signierte Upload-URL holen
+      const r = await fetch('/api/lot-files', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ org_id: orgId, lot_id: lotId, filename: file.name })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Upload-URL fehlgeschlagen');
 
-    const ins = await supabase.from('attachments').insert({
-      org_id: orgId, green_lot_id: lotId, file_path: key, file_name: file.name, content_type: file.type
-    });
-    if (ins.error) { alert(ins.error.message); setBusy(false); return; }
+      // 2) Datei hochladen (token bevorzugt)
+      if (j.token) {
+        // supabase helper
+        const up = await supabase.storage.from('attachments').uploadToSignedUrl(j.path, j.token, file);
+        if (up.error) throw up.error;
+      } else {
+        // Fallback: PUT auf signedUrl
+        const put = await fetch(j.signedUrl, { method: 'PUT', headers: { 'content-type': file.type }, body: file });
+        if (!put.ok) throw new Error('Upload fehlgeschlagen');
+      }
 
-    await load();
-    setBusy(false);
+      // 3) Metadaten speichern
+      const fin = await fetch('/api/lot-files', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ org_id: orgId, lot_id: lotId, path: j.path, file_name: file.name, content_type: file.type })
+      });
+      const jf = await fin.json();
+      if (!fin.ok) throw new Error(jf.error || 'Metadaten fehlgeschlagen');
+
+      await load();
+    } catch (err: any) {
+      alert(err.message ?? String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function openFile(row: Row) {
-    const { data, error } = await supabase.storage.from('attachments').createSignedUrl(row.file_path, 60);
-    if (error || !data?.signedUrl) { alert(error?.message ?? 'Download fehlgeschlagen'); return; }
-    window.open(data.signedUrl, '_blank');
+    const r = await fetch(`/api/lot-files?path=${encodeURIComponent(row.file_path)}`);
+    const j = await r.json();
+    if (!r.ok || !j.url) { alert(j.error || 'Download fehlgeschlagen'); return; }
+    window.open(j.url, '_blank');
   }
+
   async function remove(row: Row) {
     if (!confirm('Datei wirklich löschen?')) return;
-    await supabase.storage.from('attachments').remove([row.file_path]);
-    await supabase.from('attachments').delete().eq('id', row.id);
+    const r = await fetch('/api/lot-files', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: row.id, path: row.file_path })
+    });
+    const j = await r.json();
+    if (!r.ok) { alert(j.error || 'Löschen fehlgeschlagen'); return; }
     await load();
   }
 
